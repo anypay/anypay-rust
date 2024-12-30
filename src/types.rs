@@ -85,3 +85,32 @@ pub struct Price {
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaymentOutput {
+    pub address: Option<String>,
+    pub script: Option<String>,
+    pub amount: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaymentTemplate {
+    pub chain: Option<String>,
+    pub currency: String,
+    #[serde(rename = "to")]
+    pub outputs: Vec<PaymentOutput>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaymentOptions {
+    pub webhook: Option<String>,
+    pub redirect: Option<String>,
+    pub secret: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaymentRequest {
+    pub template: Vec<PaymentTemplate>,
+    pub options: Option<PaymentOptions>,
+}
