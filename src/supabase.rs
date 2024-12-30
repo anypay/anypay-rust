@@ -4,7 +4,7 @@ use serde_json;
 use uuid::Uuid;
 use chrono::Utc;
 
-use crate::types::{CreateInvoiceRequest, Invoice};
+use crate::types::{CreateInvoiceRequest, Invoice, Price};
 
 pub struct SupabaseClient {
     client: Postgrest,
@@ -113,5 +113,20 @@ impl SupabaseClient {
                 Err(e.into())
             }
         }
+    }
+
+    pub async fn list_prices(&self) -> Result<Vec<Price>, Box<dyn std::error::Error>> {
+        let response = self.client
+            .from("prices")
+            .select("*")
+            .auth(&self.service_role_key)
+            .execute()
+            .await?;
+
+        let response_text = response.text().await?;
+        tracing::info!("List prices response: {}", response_text);
+
+        let prices = serde_json::from_str::<Vec<Price>>(&response_text)?;
+        Ok(prices)
     }
 }

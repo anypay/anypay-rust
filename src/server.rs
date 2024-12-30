@@ -104,6 +104,19 @@ impl AnypayEventsServer {
                     }),
                 }
             }
+            Message::ListPrices => {
+                tracing::info!("Listing all prices");
+                match supabase.list_prices().await {
+                    Ok(prices) => json!({
+                        "status": "success",
+                        "data": prices
+                    }),
+                    Err(e) => json!({
+                        "status": "error",
+                        "message": format!("Error fetching prices: {}", e)
+                    }),
+                }
+            }
         }
     }
 

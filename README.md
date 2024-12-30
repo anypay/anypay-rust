@@ -1,13 +1,108 @@
 # WebSocket Event Server
 
-A WebSocket server implementation in Rust that allows clients to establish persistent connections and subscribe to events through an internal message bus.
-
+git remote add origin git@github.com:anypay/anypay-websockets-rust.git
+git push -u origin main
 ## Features
 - WebSocket server using tokio and tokio-tungstenite
 - Event dispatcher system with pub/sub capabilities
 - Async message handling
 - Client session management
 - Support for multiple concurrent connections
+
+## WebSocket API
+
+### Creating an Invoice
+
+Send a message to create a new invoice:
+```json
+{
+    "action": "create_invoice",
+    "amount": 1000,
+    "currency": "USD",
+    "account_id": 1
+}
+```
+
+Successful response:
+```json
+{
+    "status": "success",
+    "data": {
+        "id": 123,
+        "uid": "5735e250-b53e-4ace-a025-afac1bc77ee2",
+        "amount": 1000,
+        "currency": "USD",
+        "status": "unpaid",
+        "account_id": 1,
+        "createdAt": "2024-12-30T15:14:46.085243+00:00",
+        "updatedAt": "2024-12-30T15:14:46.085243+00:00"
+    }
+}
+```
+
+### Fetching an Invoice
+
+Send a message to fetch an existing invoice:
+```json
+{
+    "action": "fetch_invoice",
+    "id": "5735e250-b53e-4ace-a025-afac1bc77ee2"
+}
+```
+
+Successful response:
+```json
+{
+    "status": "success",
+    "data": {
+        "id": 123,
+        "uid": "5735e250-b53e-4ace-a025-afac1bc77ee2",
+        "amount": 1000,
+        "currency": "USD",
+        "status": "unpaid",
+        "account_id": 1,
+        "createdAt": "2024-12-30T15:14:46.085243+00:00",
+        "updatedAt": "2024-12-30T15:14:46.085243+00:00"
+    }
+}
+```
+
+### Error Responses
+
+When an error occurs, the response will have this format:
+```json
+{
+    "status": "error",
+    "message": "Error description here"
+}
+```
+
+### Listing Prices
+
+Send a message to list all prices:
+```json
+{
+    "action": "list_prices"
+}
+```
+
+Successful response:
+```json
+{
+    "status": "success",
+    "data": [
+        {
+            "id": 1,
+            "currency": "USD",
+            "amount": 1000,
+            "account_id": 1,
+            "createdAt": "2024-12-30T15:14:46.085243+00:00",
+            "updatedAt": "2024-12-30T15:14:46.085243+00:00"
+        },
+        // ... more prices ...
+    ]
+}
+```
 
 ## Prerequisites
 

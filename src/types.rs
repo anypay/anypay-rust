@@ -25,6 +25,8 @@ pub enum Message {
         currency: String,
         account_id: i64,
     },
+    #[serde(rename = "list_prices")]
+    ListPrices,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,7 +56,7 @@ pub struct CreateInvoiceRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Invoice {
-    pub id: i64,
+    pub id: i64,    
     pub uid: String,
     pub amount: i64,
     pub currency: String,
@@ -71,4 +73,15 @@ pub struct Invoice {
     #[serde(default)]
     pub complete: bool,
     // Add other optional fields as needed...
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Price {
+    pub id: i64,
+    pub currency: String,
+    pub value: f64,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
 }
