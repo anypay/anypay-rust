@@ -41,6 +41,15 @@ class WebSocketClient:
         response = await self.websocket.recv()
         return response
     
+    async def fetch_invoice(self, invoice_id):
+        message = {
+            "action": "fetch_invoice",
+            "id": invoice_id
+        }
+        await self.websocket.send(json.dumps(message))
+        response = await self.websocket.recv()
+        return response
+    
     async def close(self):
         if self.websocket:
             await self.websocket.close()
@@ -61,6 +70,36 @@ async def test_basic_functionality():
         response = await client.unsubscribe("invoice", "test_inv_1")
         logging.info(f"Unsubscribe response: {response}")
     
+    finally:
+        await client.close()
+
+async def test_invoice_fetch():
+    """Test invoice fetching functionality."""
+    client = await WebSocketClient("ws://localhost:8080").connect()
+    
+    try:
+        # Test fetching a valid invoice
+        response = await client.fetch_invoice("test_inv_1")
+        logging.info(f"Fetch invoice response: {response}")
+        
+        # Parse the response
+        response_data = json.loads(response)
+        assert response_data["status"] in ["success", "error"], "Response should have a status"
+        
+        if response_data["status"] == "success":
+            assert "data" in response_data, "Success response should contain invoice data"
+            invoice = response_data["data"]
+            assert "id" in invoice, "Invoice should have an ID"
+            assert "amount" in invoice, "Invoice should have an amount"
+            assert "currency" in invoice, "Invoice should have a currency"
+            assert "status" in invoice, "Invoice should have a status"
+        
+        # Test fetching a non-existent invoice
+        response = await client.fetch_invoice("non_existent_invoice")
+        logging.info(f"Fetch non-existent invoice response: {response}")
+        response_data = json.loads(response)
+        assert response_data["status"] == "error", "Non-existent invoice should return error"
+        
     finally:
         await client.close()
 
@@ -120,6 +159,9 @@ async def run_all_tests():
     try:
         logging.info("Testing basic functionality...")
         await test_basic_functionality()
+        
+        logging.info("Testing invoice fetching...")
+        await test_invoice_fetch()
         
         logging.info("Testing error cases...")
         await test_error_cases()

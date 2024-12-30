@@ -15,6 +15,10 @@ pub enum Message {
         sub_type: String,
         id: String,
     },
+    #[serde(rename = "fetch_invoice")]
+    FetchInvoice {
+        id: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]

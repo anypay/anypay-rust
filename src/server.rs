@@ -10,19 +10,22 @@ use serde_json::json;
 use crate::event_dispatcher::EventDispatcher;
 use crate::session::Session;
 use crate::types::Message;
+use crate::supabase::SupabaseClient;
 
 pub struct AnypayEventsServer {
     event_dispatcher: Arc<EventDispatcher>,
     sessions: Arc<RwLock<HashMap<Uuid, Session>>>,
     addr: String,
+    supabase: Arc<SupabaseClient>,
 }
 
 impl AnypayEventsServer {
-    pub fn new(addr: &str) -> Self {
+    pub fn new(addr: &str, supabase_url: &str, supabase_anon_key: &str, supabase_service_role_key: &str) -> Self {
         AnypayEventsServer {
             event_dispatcher: Arc::new(EventDispatcher::new()),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             addr: addr.to_string(),
+            supabase: Arc::new(SupabaseClient::new(supabase_url, supabase_anon_key, supabase_service_role_key)),
         }
     }
 
@@ -35,9 +38,10 @@ impl AnypayEventsServer {
             
             let event_dispatcher = self.event_dispatcher.clone();
             let sessions = self.sessions.clone();
+            let supabase = self.supabase.clone();
             
             tokio::spawn(async move {
-                if let Err(e) = Self::handle_connection(stream, event_dispatcher, sessions).await {
+                if let Err(e) = Self::handle_connection(stream, event_dispatcher, sessions, supabase).await {
                     tracing::error!("Error handling connection: {}", e);
                 }
             });
@@ -46,10 +50,51 @@ impl AnypayEventsServer {
         Ok(())
     }
 
+    async fn handle_message(
+        message: Message,
+        session: &Session,
+        event_dispatcher: &Arc<EventDispatcher>,
+        supabase: &Arc<SupabaseClient>,
+    ) -> serde_json::Value {
+        match message {
+            Message::Subscribe { sub_type, id } => {
+                event_dispatcher.subscribe(session.clone(), &sub_type, &id).await;
+                json!({
+                    "status": "success",
+                    "message": format!("Subscribed to {} {}", sub_type, id)
+                })
+            }
+            Message::Unsubscribe { sub_type, id } => {
+                event_dispatcher.unsubscribe(session.clone(), &sub_type, &id).await;
+                json!({
+                    "status": "success",
+                    "message": format!("Unsubscribed from {} {}", sub_type, id)
+                })
+            }
+            Message::FetchInvoice { id } => {
+                match supabase.get_invoice(&id, true).await {
+                    Ok(Some(invoice)) => json!({
+                        "status": "success",
+                        "data": invoice
+                    }),
+                    Ok(None) => json!({
+                        "status": "error",
+                        "message": "Invoice not found"
+                    }),
+                    Err(e) => json!({
+                        "status": "error",
+                        "message": format!("Error fetching invoice: {}", e)
+                    }),
+                }
+            }
+        }
+    }
+
     async fn handle_connection(
         stream: TcpStream,
         event_dispatcher: Arc<EventDispatcher>,
         sessions: Arc<RwLock<HashMap<Uuid, Session>>>,
+        supabase: Arc<SupabaseClient>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let ws_stream = accept_async(stream).await?;
         let (mut ws_sender, mut ws_receiver) = ws_stream.split();
@@ -77,22 +122,12 @@ impl AnypayEventsServer {
                     if let Ok(text) = msg.to_text() {
                         let response = match serde_json::from_str::<Message>(text) {
                             Ok(message) => {
-                                match message {
-                                    Message::Subscribe { sub_type, id } => {
-                                        event_dispatcher.subscribe(session.clone(), &sub_type, &id).await;
-                                        json!({
-                                            "status": "success",
-                                            "message": format!("Subscribed to {} {}", sub_type, id)
-                                        })
-                                    }
-                                    Message::Unsubscribe { sub_type, id } => {
-                                        event_dispatcher.unsubscribe(session.clone(), &sub_type, &id).await;
-                                        json!({
-                                            "status": "success",
-                                            "message": format!("Unsubscribed from {} {}", sub_type, id)
-                                        })
-                                    }
-                                }
+                                Self::handle_message(
+                                    message,
+                                    &session,
+                                    &event_dispatcher,
+                                    &supabase,
+                                ).await
                             }
                             Err(_) => json!({
                                 "status": "error",

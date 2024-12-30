@@ -1,19 +1,15 @@
 [package]
-name = "websocket-event-server"
+name = "anypay-websockets"
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
-description = "A WebSocket server with event dispatcher functionality"
-license = "MIT"
-repository = "https://github.com/yourusername/websocket-event-server"
 
 [dependencies]
-tokio = { version = "1.36", features = ["full"] }
-tokio-tungstenite = "0.21"
+tokio = { version = "1.0", features = ["full"] }
+tokio-tungstenite = "*"
 futures = "0.3"
-tokio-stream = "0.1"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-uuid = { version = "1.7", features = ["v4"] } 
+uuid = { version = "1.0", features = ["v4", "serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+postgrest = "1.0" 
