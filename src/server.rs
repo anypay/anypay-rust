@@ -72,6 +72,8 @@ impl AnypayEventsServer {
                 })
             }
             Message::FetchInvoice { id } => {
+                tracing::info!("Fetching invoice with id: {}", id);
+                println!("Fetching invoice with id: {}", id);
                 match supabase.get_invoice(&id, true).await {
                     Ok(Some(invoice)) => json!({
                         "status": "success",
@@ -84,6 +86,21 @@ impl AnypayEventsServer {
                     Err(e) => json!({
                         "status": "error",
                         "message": format!("Error fetching invoice: {}", e)
+                    }),
+                }
+            }
+            Message::CreateInvoice { amount, currency, account_id } => {
+                println!("Creating invoice with amount: {}, currency: {}, account_id: {}", amount, currency, account_id);
+
+                tracing::info!("Creating invoice with amount: {}, currency: {}, account_id: {}", amount, currency, account_id);
+                match supabase.create_invoice(amount, &currency, account_id).await {
+                    Ok(invoice) => json!({
+                        "status": "success",
+                        "data": invoice
+                    }),
+                    Err(e) => json!({
+                        "status": "error",
+                        "message": format!("Error creating invoice: {}", e)
                     }),
                 }
             }

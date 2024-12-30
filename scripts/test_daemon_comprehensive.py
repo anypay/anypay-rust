@@ -6,6 +6,7 @@ import json
 import logging
 import random
 from datetime import datetime
+import uuid
 
 logging.basicConfig(
     level=logging.INFO,
@@ -152,6 +153,37 @@ async def test_concurrent_connections():
         for client in clients:
             await client.close()
 
+async def test_create_invoice():
+    uri = "ws://localhost:8080"
+    async with websockets.connect(uri) as websocket:
+        # Create a new invoice
+        create_msg = {
+            "action": "create_invoice",
+            "amount": 1000,
+            "currency": "USD",
+            "account_id": 1
+        }
+        await websocket.send(json.dumps(create_msg))
+        response = json.loads(await websocket.recv())
+        
+        assert response["status"] == "success", f"Failed to create invoice: {response}"
+        invoice = response["data"]
+        assert invoice["amount"] == 1000
+        assert invoice["currency"] == "USD"
+        assert invoice["status"] == "pending"
+        
+        # Try to fetch the created invoice
+        fetch_msg = {
+            "action": "fetch_invoice",
+            "id": invoice["uid"]
+        }
+        await websocket.send(json.dumps(fetch_msg))
+        response = json.loads(await websocket.recv())
+        
+        assert response["status"] == "success", f"Failed to fetch created invoice: {response}"
+        fetched_invoice = response["data"]
+        assert fetched_invoice["uid"] == invoice["uid"]
+
 async def run_all_tests():
     """Run all test cases."""
     logging.info("Starting comprehensive WebSocket daemon tests")
@@ -168,6 +200,9 @@ async def run_all_tests():
         
         logging.info("Testing concurrent connections...")
         await test_concurrent_connections()
+        
+        logging.info("Testing invoice creation...")
+        await test_create_invoice()
         
         logging.info("All tests completed successfully")
     
