@@ -18,3 +18,5 @@ axum = "0.6"
 tower = "0.4"
 lapin = "2.3"
 dotenv = "0.15" 
+xrpl-rust = { git = "https://github.com/sephynox/xrpl-rust", tag = "v0.4.0", version = "0.4.0" }
+clap = "4.0"

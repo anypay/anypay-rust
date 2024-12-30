@@ -165,7 +165,7 @@ impl AnypayEventsServer {
                             })
                         };
 
-                        if let Err(e) = session.send(WsMessage::Text(response.to_string())) {
+                        if let Err(e) = session.send(WsMessage::Text(response.to_string().into())) {
                             tracing::error!("Error sending response: {}", e);
                             break;
                         }

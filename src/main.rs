@@ -4,8 +4,10 @@ mod types;
 mod server;
 mod supabase;
 mod http;
+mod xrpl;
 mod amqp;
-
+use xrpl::XRPLClient;
+use clap::Parser;
 use server::AnypayEventsServer;
 use std::net::SocketAddr;
 use axum::Server;
@@ -14,10 +16,15 @@ use supabase::SupabaseClient;
 use amqp::AmqpClient;
 use dotenv::dotenv;
 
+
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     tracing_subscriber::fmt::init();
+
+    // Get XRPL URL from env or CLI
+    let xrpl_url = std::env::var("XRPL_WSS_URL").ok().unwrap();
 
     // Load .env file if it exists
     match dotenv() {
@@ -35,6 +42,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         tracing::info!("No AMQP_URL found, skipping AMQP connection");
     }
+
+
 
     // Get Supabase credentials from environment
     let supabase_url = std::env::var("SUPABASE_URL")
@@ -65,13 +74,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Starting WebSocket server on ws://127.0.0.1:8080");
     tracing::info!("Starting HTTP server on http://127.0.0.1:3000");
+    let mut xrpl = XRPLClient::new();
+    // Run all services concurrently
     
-    // Run both servers concurrently
-    tokio::join!(
-        ws_server.run(),
-        Server::bind(&http_addr)
-            .serve(http_app.into_make_service())
-    );
+        tokio::join!(
+            ws_server.run(),
+            Server::bind(&http_addr)
+                .serve(http_app.into_make_service()),
+             async move { xrpl.run_with_url(&xrpl_url).await }    
+        );
+
 
     Ok(())
 }
