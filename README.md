@@ -1,217 +1,328 @@
-# WebSocket Event Server
+# Anypay WebSocket Server
 
-git remote add origin git@github.com:anypay/anypay-websockets-rust.git
-git push -u origin main
+A real-time payment processing server that handles WebSocket connections, HTTP endpoints, and integrates with various payment networks.
+
 ## Features
-- WebSocket server using tokio and tokio-tungstenite
-- Event dispatcher system with pub/sub capabilities
-- Async message handling
-- Client session management
-- Support for multiple concurrent connections
 
-## WebSocket API
+- WebSocket server for real-time payment notifications
+- HTTP API for payment processing
+- Price conversion service with automatic updates
+- XRPL integration
+- AMQP support for message queuing
+- Supabase integration for data storage
 
-### Creating an Invoice
+## Setup
 
-Send a message to create a new invoice:
-```json
-{
-    "action": "create_invoice",
-    "amount": 1000,
-    "currency": "USD",
-    "account_id": 1
-}
+1. Clone the repository
+2. Copy `.env.example` to `.env` and configure:
+
+```
+SUPABASE_URL=your_supabase_url
+SUPABASE_ANON_KEY=your_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+AMQP_URL=optional_amqp_url
+WEBSOCKET_HOST=127.0.0.1
+WEBSOCKET_PORT=8080
+HTTP_HOST=127.0.0.1
+HTTP_PORT=3000
+ETH_WSS_URL=optional_ethereum_websocket_url
+AVAX_WSS_URL=optional_avalanche_websocket_url
+BNB_WSS_URL=optional_bnb_websocket_url
+POLYGON_WSS_URL=optional_polygon_websocket_url
+XRPL_WSS_URL=optional_xrpl_websocket_url
 ```
 
-Successful response:
-```json
-{
-    "status": "success",
-    "data": {
-        "id": 123,
-        "uid": "5735e250-b53e-4ace-a025-afac1bc77ee2",
-        "amount": 1000,
-        "currency": "USD",
-        "status": "unpaid",
-        "account_id": 1,
-        "createdAt": "2024-12-30T15:14:46.085243+00:00",
-        "updatedAt": "2024-12-30T15:14:46.085243+00:00"
-    }
-}
+3. Install dependencies:
+
+```
+cargo build
 ```
 
-### Fetching an Invoice
+4. Run the server:
 
-Send a message to fetch an existing invoice:
-```json
-{
-    "action": "fetch_invoice",
-    "id": "5735e250-b53e-4ace-a025-afac1bc77ee2"
-}
+```
+cargo run
 ```
 
-Successful response:
-```json
-{
-    "status": "success",
-    "data": {
-        "id": 123,
-        "uid": "5735e250-b53e-4ace-a025-afac1bc77ee2",
-        "amount": 1000,
-        "currency": "USD",
-        "status": "unpaid",
-        "account_id": 1,
-        "createdAt": "2024-12-30T15:14:46.085243+00:00",
-        "updatedAt": "2024-12-30T15:14:46.085243+00:00"
-    }
-}
+## Services
+
+### WebSocket Server
+- Handles real-time payment notifications
+- Price conversion
+- Payment status updates
+
+### HTTP Server
+- Payment processing endpoints
+- Price information
+- Account management
+
+### Price Service
+- Automatic price updates every minute
+- Multiple currency support
+- Real-time conversion
+
+### XRPL Integration
+- XRP Ledger connection
+- Payment monitoring
+- Transaction processing
+
+## Testing
+
+Run the test suite:
+
+```
+cargo test
 ```
 
-### Error Responses
+Test WebSocket price conversion:
 
-When an error occurs, the response will have this format:
-```json
-{
-    "status": "error",
-    "message": "Error description here"
-}
+```
+python scripts/test_prices.py
 ```
 
-### Listing Prices
+## API Documentation
 
-Send a message to list all prices:
-```json
-{
-    "action": "list_prices"
-}
-```
+### WebSocket Messages
 
-Successful response:
-```json
-{
-    "status": "success",
-    "data": [
-        {
-            "id": 1,
-            "currency": "USD",
-            "amount": 1000,
-            "account_id": 1,
-            "createdAt": "2024-12-30T15:14:46.085243+00:00",
-            "updatedAt": "2024-12-30T15:14:46.085243+00:00"
-        },
-        // ... more prices ...
-    ]
-}
-```
-
-## Prerequisites
-
-- Rust (1.70.0 or later)
-- Python 3.7+ (for running tests)
-- pip (for installing Python dependencies)
-
-## Building the Project
-
-1. Clone the repository:
-
-```bash
-git clone <repository-url>
-cd <project-directory>
-```
-
-2. Build the project:
-
-```bash
-cargo build --release
-```
-
-## Running the Server
-
-Start the WebSocket server:
-
-```bash
-cargo run --release
-```
-
-The server will start listening on `ws://localhost:8080` by default.
-
-## Running the Tests
-
-1. First, install the required Python dependencies:
-
-```bash
-pip install websockets
-```
-
-2. Make sure the WebSocket server is running in one terminal:
-
-```bash
-cargo run --release
-```
-
-3. In another terminal, run the Python test script:
-
-```bash
-python3 scripts/test_deamon_comprehensive.py
-```
-
-The test script will run through several test cases:
-- Basic subscription functionality
-- Error handling
-- Concurrent connections
-
-## Test Script Structure
-
-The test script (`scripts/test_websocket.py`) includes several test cases:
-
-- `test_basic_functionality()`: Tests basic subscribe/unsubscribe operations
-- `test_error_cases()`: Tests various error conditions
-- `test_concurrent_connections()`: Tests multiple simultaneous connections
-
-## Example WebSocket Messages
-
-Subscribe to an event:
+Price conversion:
 
 ```json
 {
-    "action": "subscribe",
-    "type": "invoice",
-    "id": "inv_123"
+  "action": "convert_price",
+  "quote_currency": "BTC",
+  "base_currency": "USD",
+  "quote_value": 1
 }
 ```
 
-Unsubscribe from an event:
+### HTTP Endpoints
 
-```json
-{
-    "action": "unsubscribe",
-    "type": "invoice",
-    "id": "inv_123"
-}
-```
+- `GET /prices` - Get current prices
+- `POST /convert` - Convert between currencies
+- `POST /invoices` - Create new invoice
 
-## Project Structure
+## Development
+
+1. Install development dependencies:
 
 ```
-.
-├── src/
-│   ├── main.rs           # Server implementation
-│   ├── types.rs          # Message and type definitions
-│   ├── session.rs        # Client session management
-│   └── event_dispatcher.rs # Event subscription system
-├── scripts/
-│   └── test_websocket.py # Python test suite
-└── README.md
+cargo install cargo-watch
+```
+
+2. Run in development mode:
+
+```
+cargo watch -x run
 ```
 
 ## Contributing
 
 1. Fork the repository
-2. Create your feature branch (\`git checkout -b feature/amazing-feature\`)
-3. Commit your changes (\`git commit -m 'Add some amazing feature'\`)
-4. Push to the branch (\`git push origin feature/amazing-feature\`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Submit a pull request
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+[Insert License Information]
+
+## WebSocket API
+
+Connect to `ws://localhost:8080` to interact with the server.
+
+### Message Format
+All messages follow this format:
+```json
+{
+    "action": "action_name",
+    "status": "success|error",
+    ... additional fields
+}
+```
+
+### Available Actions
+
+#### Price Conversion
+```json
+// Request
+{
+    "action": "convert_price",
+    "quote_currency": "BTC",
+    "base_currency": "USD",
+    "quote_value": 1
+}
+
+// Response
+{
+    "status": "success",
+    "data": {
+        "quote_currency": "BTC",
+        "base_currency": "USD",
+        "quote_value": 1,
+        "base_value": 43000.00,
+        "timestamp": "2024-01-01T12:00:00Z"
+    }
+}
+```
+
+#### List Prices
+```json
+// Request
+{
+    "action": "list_prices"
+}
+
+// Response
+{
+    "status": "success",
+    "data": [
+        {
+            "id": "price_123",
+            "currency": "BTC",
+            "value": 43000.00,
+            "createdAt": "2024-01-01T12:00:00Z",
+            "updatedAt": "2024-01-01T12:00:00Z"
+        }
+    ]
+}
+```
+
+#### Create Invoice
+```json
+// Request
+{
+    "action": "create_invoice",
+    "amount": 1000,
+    "currency": "USD",
+    "account_id": 1,
+    "webhook_url": "https://example.com/webhook",
+    "redirect_url": "https://example.com/return",
+    "memo": "Payment for services"
+}
+
+// Response
+{
+    "status": "success",
+    "data": {
+        "invoice": {
+            "uid": "inv_123",
+            "amount": 1000,
+            "currency": "USD",
+            "status": "unpaid",
+            "created_at": "2024-01-01T12:00:00Z"
+        }
+    }
+}
+```
+
+#### Fetch Invoice
+```json
+// Request
+{
+    "action": "fetch_invoice",
+    "id": "inv_123"
+}
+
+// Response
+{
+    "status": "success",
+    "data": {
+        "uid": "inv_123",
+        "amount": 1000,
+        "currency": "USD",
+        "status": "unpaid",
+        "created_at": "2024-01-01T12:00:00Z"
+    }
+}
+```
+
+#### Subscribe to Events
+```json
+// Request
+{
+    "action": "subscribe",
+    "type": "invoice|account|address",
+    "id": "resource_id"
+}
+
+// Response
+{
+    "status": "success",
+    "message": "Subscribed to invoice resource_id"
+}
+
+// Event Message
+{
+    "type": "invoice.updated",
+    "data": {
+        "id": "inv_123",
+        "status": "paid",
+        "updated_at": "2024-01-01T12:00:00Z"
+    }
+}
+```
+
+#### Unsubscribe from Events
+```json
+// Request
+{
+    "action": "unsubscribe",
+    "type": "invoice|account|address",
+    "id": "resource_id"
+}
+
+// Response
+{
+    "status": "success",
+    "message": "Unsubscribed from invoice resource_id"
+}
+```
+
+### Testing WebSocket API
+
+The repository includes several test scripts to verify API functionality:
+
+1. Test price conversion:
+```bash
+python scripts/test_prices.py
+```
+
+2. Test invoice creation:
+```bash
+python scripts/test_create_invoice.py
+```
+
+3. Test price listing:
+```bash
+python scripts/test_list_prices.py
+```
+
+4. Run comprehensive tests:
+```bash
+python scripts/test_daemon_comprehensive.py
+```
+
+### Event Types
+
+The WebSocket server emits various events that you can subscribe to:
+
+- `invoice.created` - New invoice created
+- `invoice.updated` - Invoice status changed
+- `payment.received` - Payment detected
+- `price.updated` - Price update received
+
+### Error Handling
+
+Error responses follow this format:
+```json
+{
+    "status": "error",
+    "message": "Error description"
+}
+```
+
+Common error scenarios:
+- Invalid message format
+- Resource not found
+- Invalid subscription type
+- Missing required fields
+- Server error

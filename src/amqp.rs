@@ -94,9 +94,9 @@
 //! This allows callers to handle connection, channel, and messaging errors appropriately.
 
 use lapin::{
-    options::*, types::FieldTable, Connection,
-    ConnectionProperties, Channel, Consumer
+    options::*, types::FieldTable, BasicProperties, Channel, Connection, ConnectionProperties, Consumer
 };
+use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use futures::StreamExt;
@@ -160,6 +160,42 @@ impl AmqpClient {
         Ok(Self {
             channel: Arc::new(Mutex::new(channel)),
         })
+    }
+
+    async fn publish(&self, routing_key: &str, payload: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+        let channel = self.channel.lock().await;
+        channel
+            .basic_publish(
+                "events",
+                routing_key,
+                BasicPublishOptions::default(),
+                &serde_json::to_vec(payload)?,
+                BasicProperties::default(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn publish_invoice_created(
+        &self,
+        uid: &str,
+        amount: i64,
+        currency: &str,
+        account_id: i32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let payload = json!({
+            "type": "invoice.created",
+            "data": {
+                "uid": uid,
+                "amount": amount,
+                "currency": currency,
+                "account_id": account_id
+            }
+        });
+
+        self.publish("invoice.created", &payload).await?;
+        tracing::info!("Published invoice.created event for invoice {}", uid);
+        Ok(())
     }
 }
 

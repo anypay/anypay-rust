@@ -9,7 +9,7 @@ use serde_json::json;
 use uuid::Uuid;
 use std::sync::Arc;
 
-use crate::supabase::SupabaseClient;
+use crate::{supabase::SupabaseClient, types::PaymentOption};
 use crate::types::{Invoice, Price, PaymentRequest};
 
 // Request/Response types matching swagger spec
@@ -17,6 +17,7 @@ use crate::types::{Invoice, Price, PaymentRequest};
 pub struct CreateInvoiceRequest {
     amount: i64,
     currency: String,
+    account_id: i64,
     redirect_url: Option<String>,
     webhook_url: Option<String>,
     wordpress_site_url: Option<String>,
@@ -31,7 +32,8 @@ pub struct CreateInvoiceRequest {
 
 #[derive(Serialize)]
 pub struct InvoiceResponse {
-    invoice: Invoice,
+    pub invoice: Invoice,
+    pub payment_options: Vec<PaymentOption>,
 }
 
 #[derive(Serialize)]
@@ -71,7 +73,7 @@ impl HttpServer {
                 let supabase = supabase.clone();
                 move |Path(invoice_id): Path<String>| async move {
                     match supabase.get_invoice(&invoice_id, true).await {
-                        Ok(Some(invoice)) => Ok(Json(InvoiceResponse { invoice })),
+                        Ok(Some(invoice)) => Ok(Json(InvoiceResponse { invoice, payment_options: todo!() })),
                         Ok(None) => Err(StatusCode::NOT_FOUND),
                         Err(e) => {
                             tracing::error!("Error fetching invoice: {}", e);
@@ -81,8 +83,21 @@ impl HttpServer {
                 }
             }))
             .route("/api/v1/invoices", post(move |Json(payload): Json<CreateInvoiceRequest>| async move {
-                match supabase.create_invoice(payload.amount, &payload.currency, 1).await {
-                    Ok(invoice) => Ok(Json(InvoiceResponse { invoice })),
+                match supabase.create_invoice(
+                    payload.amount, 
+                    &payload.currency, 
+                    payload.account_id,  // TODO: Get real account_id
+                    payload.webhook_url,
+                    payload.redirect_url,
+                    payload.memo
+                ).await {
+                    Ok(response) => {
+                        let data = response.as_object().unwrap();
+                        Ok(Json(InvoiceResponse { 
+                            invoice: serde_json::from_value(data["invoice"].clone()).unwrap(),
+                            payment_options: serde_json::from_value(data["payment_options"].clone()).unwrap(),
+                        }))
+                    },
                     Err(e) => {
                         tracing::error!("Error creating invoice: {}", e);
                         Err(StatusCode::INTERNAL_SERVER_ERROR)

@@ -1,0 +1,139 @@
+asyncapi: '2.6.0'
+info:
+  title: Anypay WebSocket API
+  version: '1.0.0'
+  description: WebSocket server for real-time invoice management
+
+servers:
+  production:
+    url: ws://localhost:3000
+    protocol: ws
+    description: Local WebSocket server
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: API Key token for authentication
+
+  schemas:
+    Invoice:
+      type: object
+      properties:
+        uid:
+          type: string
+          description: Unique identifier for the invoice
+        amount:
+          type: integer
+          format: int64
+          description: Amount in smallest currency unit (e.g., cents)
+        currency:
+          type: string
+          description: Currency code (e.g., USD, BTC)
+        status:
+          type: string
+          enum: [unpaid, paid, cancelled]
+        account_id:
+          type: integer
+          description: ID of the account that owns the invoice
+        webhook_url:
+          type: string
+          nullable: true
+        redirect_url:
+          type: string
+          nullable: true
+        memo:
+          type: string
+          nullable: true
+
+    CreateInvoiceRequest:
+      type: object
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        webhook_url:
+          type: string
+          nullable: true
+        redirect_url:
+          type: string
+          nullable: true
+        memo:
+          type: string
+          nullable: true
+
+    CancelInvoiceRequest:
+      type: object
+      required:
+        - uid
+      properties:
+        uid:
+          type: string
+
+    SuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success]
+        data:
+          type: object
+        message:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [error]
+        message:
+          type: string
+
+channels:
+  /:
+    publish:
+      message:
+        oneOf:
+          - name: CreateInvoice
+            payload:
+              type: object
+              required:
+                - type
+                - data
+              properties:
+                type:
+                  type: string
+                  const: CreateInvoice
+                data:
+                  $ref: '#/components/schemas/CreateInvoiceRequest'
+          - name: CancelInvoice
+            payload:
+              type: object
+              required:
+                - type
+                - data
+              properties:
+                type:
+                  type: string
+                  const: CancelInvoice
+                data:
+                  $ref: '#/components/schemas/CancelInvoiceRequest'
+    subscribe:
+      message:
+        oneOf:
+          - name: Response
+            payload:
+              oneOf:
+                - $ref: '#/components/schemas/SuccessResponse'
+                - $ref: '#/components/schemas/ErrorResponse' 

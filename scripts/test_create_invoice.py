@@ -4,6 +4,8 @@ import asyncio
 import websockets
 import json
 import logging
+from dotenv import load_dotenv
+import os
 
 logging.basicConfig(
     level=logging.INFO,
@@ -11,16 +13,25 @@ logging.basicConfig(
 )
 
 async def test_create_invoice():
+    load_dotenv()
+    api_key = os.getenv('ANYPAY_API_KEY')
+    
+    if not api_key:
+        print("Error: ANYPAY_API_KEY not found in .env file")
+        return
+
     uri = "ws://localhost:8080"
     logging.info("Connecting to WebSocket server...")
     
-    async with websockets.connect(uri) as websocket:
-        # Create a new invoice
+    async with websockets.connect(
+        'ws://localhost:8080',
+        extra_headers={'Authorization': f'Bearer {api_key}'}
+    ) as websocket:  
+              # Create a new invoice
         create_msg = {
             "action": "create_invoice",
             "amount": 1000,
-            "currency": "USD",
-            "account_id": 1
+            "currency": "USD"
         }
         
         logging.info(f"Sending create invoice request: {create_msg}")
@@ -33,7 +44,7 @@ async def test_create_invoice():
         
         # Validate response
         assert response_data["status"] == "success", f"Failed to create invoice: {response_data}"
-        invoice = response_data["data"]
+        invoice = response_data["data"]["invoice"]
         assert invoice["amount"] == 1000, f"Incorrect amount: {invoice['amount']}"
         assert invoice["currency"] == "USD", f"Incorrect currency: {invoice['currency']}"
         assert invoice["status"] == "unpaid", f"Incorrect status: {invoice['status']}"

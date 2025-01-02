@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use chrono::{DateTime, Utc};
+
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "action")]
@@ -20,13 +22,50 @@ pub enum Message {
         id: String,
     },
     #[serde(rename = "create_invoice")]
-    CreateInvoice {
+    CreateInvoice {        
         amount: i64,
         currency: String,
-        account_id: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        webhook_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        redirect_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        memo: Option<String>,
     },
     #[serde(rename = "list_prices")]
     ListPrices,
+    #[serde(rename = "convert_price")]
+    ConvertPrice {
+        quote_currency: String,
+        base_currency: String,
+        #[serde(deserialize_with = "deserialize_number_from_string")]
+        quote_value: f64,
+    },
+    #[serde(rename = "cancel_invoice")]
+    CancelInvoice {
+        uid: String,
+    },
+}
+
+fn deserialize_number_from_string<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrFloat {
+        String(String),
+        Float(f64),
+        Integer(i64),
+    }
+
+    match StringOrFloat::deserialize(deserializer)? {
+        StringOrFloat::String(s) => s.parse::<f64>().map_err(Error::custom),
+        StringOrFloat::Float(f) => Ok(f),
+        StringOrFloat::Integer(i) => Ok(i as f64),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -52,6 +91,9 @@ pub struct CreateInvoiceRequest {
     pub created_at: String,  // ISO 8601 timestamp
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
+    pub webhook_url: Option<String>,
+    pub redirect_url: Option<String>,
+    pub memo: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -75,7 +117,7 @@ pub struct Invoice {
     // Add other optional fields as needed...
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Price {
     pub id: i64,
     pub currency: String,
@@ -113,4 +155,61 @@ pub struct PaymentOptions {
 pub struct PaymentRequest {
     pub template: Vec<PaymentTemplate>,
     pub options: Option<PaymentOptions>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Output {
+    pub address: String,
+    pub amount: i64,
+}
+
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaymentOption {
+    pub invoice_uid: String,
+    pub currency: String,
+    pub chain: String,
+    pub amount: i64,
+    pub address: String,
+    pub outputs: Vec<Output>,
+    pub uri: String,
+    pub fee: i64,
+    pub createdAt: chrono::DateTime<chrono::Utc>,
+    pub updatedAt: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Account {
+    pub id: i64,
+    pub denomination: Option<String>,
+    // ... other fields ...
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Address {
+    pub chain: String,
+    pub currency: String,
+    pub value: String,
+    // ... other fields
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Coin {
+    pub id: i64,
+    pub currency: String,
+    pub chain: String,
+    #[serde(default)]
+    pub precision: Option<i32>,
+    #[serde(default)]
+    pub unavailable: bool,
+    #[serde(rename = "uri_template")]
+    pub uri_template: Option<String>,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+    #[serde(default)]
+    pub supported: bool,
+    pub required_fee_rate: Option<i64>,
+    pub color: Option<String>,
 }

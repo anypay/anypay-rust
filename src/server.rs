@@ -2,15 +2,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
+use tokio_tungstenite::{
+    accept_hdr_async,
+    tungstenite::handshake::server::{Request, Response, ErrorResponse},
+};
 use futures::{StreamExt, SinkExt};
 use uuid::Uuid;
 use serde_json::json;
 
 use crate::event_dispatcher::EventDispatcher;
+use crate::payment_options::create_payment_options;
 use crate::session::Session;
 use crate::types::Message;
 use crate::supabase::SupabaseClient;
+use crate::prices::{ConversionRequest, convert};
+use crate::invoices;
 
 pub struct AnypayEventsServer {
     event_dispatcher: Arc<EventDispatcher>,
@@ -56,6 +62,7 @@ impl AnypayEventsServer {
         event_dispatcher: &Arc<EventDispatcher>,
         supabase: &Arc<SupabaseClient>,
     ) -> serde_json::Value {
+        println!("message in handle message: {:?}", message);
         match message {
             Message::Subscribe { sub_type, id } => {
                 event_dispatcher.subscribe(session.clone(), &sub_type, &id).await;
@@ -73,7 +80,6 @@ impl AnypayEventsServer {
             }
             Message::FetchInvoice { id } => {
                 tracing::info!("Fetching invoice with id: {}", id);
-                println!("Fetching invoice with id: {}", id);
                 match supabase.get_invoice(&id, true).await {
                     Ok(Some(invoice)) => json!({
                         "status": "success",
@@ -89,19 +95,32 @@ impl AnypayEventsServer {
                     }),
                 }
             }
-            Message::CreateInvoice { amount, currency, account_id } => {
-                println!("Creating invoice with amount: {}, currency: {}, account_id: {}", amount, currency, account_id);
-
-                tracing::info!("Creating invoice with amount: {}, currency: {}, account_id: {}", amount, currency, account_id);
-                match supabase.create_invoice(amount, &currency, account_id).await {
-                    Ok(invoice) => json!({
-                        "status": "success",
-                        "data": invoice
-                    }),
-                    Err(e) => json!({
+            Message::CreateInvoice { amount, currency, webhook_url, redirect_url, memo } => {
+                if let Some(account_id) = session.account_id {
+                    println!("account_id in create invoice: {:?}", account_id);
+                    match invoices::create_invoice(
+                        &supabase,
+                        amount,
+                        &currency,
+                        account_id,
+                        webhook_url,
+                        redirect_url,
+                        memo
+                    ).await {
+                        Ok(invoice) => json!({
+                            "status": "success",
+                            "data": invoice
+                        }),
+                        Err(e) => json!({
+                            "status": "error",
+                            "message": format!("Failed to create invoice: {}", e)
+                        })
+                    }
+                } else {
+                    json!({
                         "status": "error",
-                        "message": format!("Error creating invoice: {}", e)
-                    }),
+                        "message": "Unauthorized: API key required: See https://www.anypayx.com/developer/websockets/authentication"
+                    })
                 }
             }
             Message::ListPrices => {
@@ -117,6 +136,48 @@ impl AnypayEventsServer {
                     }),
                 }
             }
+            Message::ConvertPrice { quote_currency, base_currency, quote_value } => {
+                let req = ConversionRequest {
+                    quote_currency,
+                    base_currency,
+                    quote_value,
+                };
+                
+                match convert(req, supabase).await {
+                    // if ok log the result
+                    Ok(result) => {
+                        json!({
+                        
+                        "status": "success",
+                        "data": result
+                    })},
+                    Err(e) => {
+                        json!({
+                            "status": "error",
+                            "message": format!("Conversion failed: {}", e)
+                        })
+                    },
+                }
+            }
+            Message::CancelInvoice { uid } => {
+                if let Some(account_id) = session.account_id {
+                    match supabase.cancel_invoice(&uid, account_id).await {
+                        Ok(()) => json!({
+                            "status": "success",
+                            "message": "Invoice cancelled successfully"
+                        }),
+                        Err(e) => json!({
+                            "status": "error",
+                            "message": e.to_string()
+                        })
+                    }
+                } else {
+                    json!({
+                        "status": "error",
+                        "message": "Unauthorized"
+                    })
+                }
+            }
         }
     }
 
@@ -125,21 +186,57 @@ impl AnypayEventsServer {
         event_dispatcher: Arc<EventDispatcher>,
         sessions: Arc<RwLock<HashMap<Uuid, Session>>>,
         supabase: Arc<SupabaseClient>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let ws_stream = accept_async(stream).await?;
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        let (sender, mut receiver) = futures::channel::mpsc::unbounded();
+        let mut session = Session::new(Uuid::new_v4(), sender);
+        let supabase_clone = supabase.clone();
+
+        let ws_stream = accept_hdr_async(stream, |req: &Request, res: Response| {
+            
+            if let Some(auth) = req.headers().get("Authorization") {
+                println!("Authorization: {:?}", auth);
+                if let Ok(auth_str) = auth.to_str() {
+                    println!("Authorization string: {:?}", auth_str);
+                    if auth_str.starts_with("Bearer ") {
+                        let token = auth_str[7..].trim().to_string();
+                        // Store token in session for async validation after handshake
+                        println!("Token: {:?}", token);
+                        session.auth_token = Some(token);
+                    }
+                }
+            }
+            Ok(res)
+        }).await?;
+
+        // Validate token after handshake
+        if let Some(token) = &session.auth_token {
+            println!("session.auth_token: {:?}", token);
+            if let Ok(Some(account_id)) = supabase_clone.validate_api_key(token).await {
+                println!("Account ID: {:?}", account_id);
+                session.set_account_id(account_id);
+                tracing::info!("Authenticated session {} for account {}", session.id, account_id);
+            }
+        }
+
         let (mut ws_sender, mut ws_receiver) = ws_stream.split();
         let (sender, mut receiver) = futures::channel::mpsc::unbounded();
-        let session_id = Uuid::new_v4();
-        let session = Session::new(session_id, sender);
-        
+        session.sender = Some(sender).unwrap();
+
         // Store the session
-        sessions.write().await.insert(session_id, session.clone());
+        sessions.write().await.insert(session.id, session.clone());
+
+        // Create a flag to track connection state
+        let is_connected = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let is_connected_clone = is_connected.clone();
 
         // Spawn a task to forward messages from the channel to the websocket
         let _send_task = tokio::spawn(async move {
             while let Some(message) = receiver.next().await {
+                if !is_connected_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
                 if let Err(e) = ws_sender.send(message).await {
-                    tracing::error!("Error sending message: {}", e);
+                    tracing::debug!("Connection closed by client: {}", e);
                     break;
                 }
             }
@@ -150,6 +247,7 @@ impl AnypayEventsServer {
             match msg {
                 Ok(msg) => {
                     if let Ok(text) = msg.to_text() {
+                        println!("text in handle connection: {:?}", text);
                         let response = match serde_json::from_str::<Message>(text) {
                             Ok(message) => {
                                 Self::handle_message(
@@ -165,22 +263,26 @@ impl AnypayEventsServer {
                             })
                         };
 
-                        if let Err(e) = session.send(WsMessage::Text(response.to_string().into())) {
-                            tracing::error!("Error sending response: {}", e);
+                        if let Err(e) = session.send(tokio_tungstenite::tungstenite::Message::Text(response.to_string().into())) {
+                            tracing::debug!("Failed to send response, client likely disconnected: {}", e);
                             break;
                         }
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Error receiving message: {}", e);
+                    tracing::debug!("WebSocket error: {}", e);
                     break;
                 }
             }
         }
 
-        // Clean up session when connection closes
-        sessions.write().await.remove(&session_id);
-        tracing::info!("Connection closed for session: {}", session_id);
+        // Mark connection as closed
+        is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
+        
+        // Clean up session
+        sessions.write().await.remove(&session.id);
+        tracing::info!("Connection closed for session: {}", session.id);
+        
         Ok(())
     }
 } 

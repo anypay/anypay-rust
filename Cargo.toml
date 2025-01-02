@@ -20,3 +20,9 @@ lapin = "2.3"
 dotenv = "0.15" 
 xrpl-rust = { git = "https://github.com/sephynox/xrpl-rust", tag = "v0.4.0", version = "0.4.0" }
 clap = "4.0"
+lazy_static = "1.4"
+shortid = "1.0.6"
+bigdecimal = "0.4.7"
+anyhow = "1.0"
+alloy = { version = "0.3", features = ["full"] }
+futures-util = "0.3"
