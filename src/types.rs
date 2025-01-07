@@ -45,6 +45,8 @@ pub enum Message {
     CancelInvoice {
         uid: String,
     },
+    #[serde(rename = "ping")]
+    Ping,
 }
 
 fn deserialize_number_from_string<'de, D>(deserializer: D) -> Result<f64, D::Error>

@@ -178,6 +178,13 @@ impl AnypayEventsServer {
                     })
                 }
             }
+            Message::Ping => {
+                json!({
+                    "type": "pong",
+                    "status": "success",
+                    "timestamp": chrono::Utc::now().timestamp()
+                })
+            },
         }
     }
 

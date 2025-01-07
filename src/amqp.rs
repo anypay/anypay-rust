@@ -203,6 +203,7 @@ async fn consume_events(mut consumer: Consumer) {
     while let Some(delivery) = consumer.next().await {
         if let Ok(delivery) = delivery {
             if let Ok(data) = std::str::from_utf8(&delivery.data) {
+                println!("AMQP Event: {}", data);
                 tracing::info!("AMQP Event: {}", data);
             }
             delivery.ack(BasicAckOptions::default()).await.ok();
