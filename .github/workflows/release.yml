@@ -6,8 +6,24 @@ on:
       - 'v*'
 
 jobs:
-  build-linux:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: anypay-websockets-linux-x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: anypay-websockets-linux-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: anypay-websockets-macos-x86_64
+          - os: macos-14  # For M1/M2
+            target: aarch64-apple-darwin
+            artifact_name: anypay-websockets-macos-arm64
+    
+    runs-on: ${{ matrix.os }}
     
     steps:
     - uses: actions/checkout@v3
@@ -16,25 +32,31 @@ jobs:
       uses: actions-rs/toolchain@v1
       with:
         toolchain: stable
-        target: x86_64-unknown-linux-gnu
+        target: ${{ matrix.target }}
         override: true
+
+    - name: Install Cross-Compilation Tools
+      if: matrix.target == 'aarch64-unknown-linux-gnu'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
     - name: Build
       run: |
-        cargo build --release --target x86_64-unknown-linux-gnu
-        tar -czf anypay-websockets-linux-x86_64.tar.gz -C target/x86_64-unknown-linux-gnu/release anypay-websockets
+        cargo build --release --target ${{ matrix.target }}
+        tar -czf ${{ matrix.artifact_name }}.tar.gz -C target/${{ matrix.target }}/release anypay-websockets
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
       if: startsWith(github.ref, 'refs/tags/')
       with:
         files: |
-          anypay-websockets-linux-x86_64.tar.gz
+          ${{ matrix.artifact_name }}.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Upload artifact
       uses: actions/upload-artifact@v3
       with:
-        name: anypay-websockets-linux-x86_64
-        path: target/x86_64-unknown-linux-gnu/release/anypay-websockets 
+        name: ${{ matrix.artifact_name }}
+        path: target/${{ matrix.target }}/release/anypay-websockets 
