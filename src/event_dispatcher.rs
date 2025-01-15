@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use tokio::sync::RwLock;
-use crate::session::Session;
+use uuid::Uuid;
 use crate::types::Subscription;
+use crate::session::Session;
 
 pub struct EventDispatcher {
-    subscriptions: RwLock<HashMap<Subscription, HashSet<uuid::Uuid>>>,
+    subscriptions: RwLock<HashMap<Subscription, HashSet<Uuid>>>,
 }
 
 impl EventDispatcher {
@@ -39,5 +40,14 @@ impl EventDispatcher {
                 subs.remove(&subscription);
             }
         }
+    }
+
+    pub async fn get_subscribers(&self, subscription: &Subscription) -> HashSet<Uuid> {
+        self.subscriptions
+            .read()
+            .await
+            .get(subscription)
+            .cloned()
+            .unwrap_or_default()
     }
 } 

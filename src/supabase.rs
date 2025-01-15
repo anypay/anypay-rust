@@ -16,8 +16,9 @@ lazy_static! {
     static ref PRICE_CACHE: RwLock<HashMap<String, Price>> = RwLock::new(HashMap::new());
 }
 
+#[derive(Clone)]
 pub struct SupabaseClient {
-    client: Postgrest,
+    client: Arc<Postgrest>,
     anon_key: String,
     service_role_key: String,
 }
@@ -31,9 +32,9 @@ impl SupabaseClient {
             format!("{}/rest/v1", url.trim_end_matches('/'))
         };
 
-        let client = Postgrest::new(&api_url)
+        let client = Arc::new(Postgrest::new(&api_url)
             .insert_header("apikey", anon_key)
-            .insert_header("Authorization", &format!("Bearer {}", service_role_key));
+            .insert_header("Authorization", &format!("Bearer {}", service_role_key)));
 
         SupabaseClient {
             client,
@@ -42,27 +43,58 @@ impl SupabaseClient {
         }
     }
 
-    pub async fn get_invoice(&self, invoice_id: &str, use_service_role: bool) -> Result<Option<Invoice>, Box<dyn std::error::Error>> {
+    pub async fn get_invoice(&self, invoice_id: &str, use_service_role: bool) -> Result<Option<(Invoice, Vec<PaymentOption>)>, Box<dyn std::error::Error>> {
         let auth_key = if use_service_role {
             &self.service_role_key
         } else {
             &self.anon_key
         };
 
-        let response = self.client
+        tracing::info!("Fetching invoice with id: {}", invoice_id);
+
+        // Get invoice
+        let response = self.client.as_ref()
             .from("invoices")
             .select("*")
             .eq("uid", invoice_id)
-            .auth(auth_key)
+            .auth(self.service_role_key.to_string())
             .execute()
             .await?;
 
-        let response_text = response.text().await?;
+        tracing::info!("Invoice response: {:?}", response);
 
+        let response_text = response.text().await?;
+        tracing::info!("Invoice response text: {:?}", response_text);
         let invoices: Vec<Invoice> = serde_json::from_str(&response_text)?;
-        // return only the first invoice
+
+        tracing::info!("Invoices: {:?}", invoices);
+        
         if let Some(invoice) = invoices.into_iter().next() {
-            Ok(Some(invoice))
+            // Get payment options
+            let response = self.client.as_ref()
+                .from("payment_options")
+                .select("*")
+                .eq("invoice_uid", invoice_id)
+                .auth(auth_key)
+                .execute()
+                .await?;
+
+            let response_text = response.text().await?;
+            let payment_options: Vec<PaymentOption> = serde_json::from_str(&response_text)?;
+
+            // Get account for refreshing payment options
+            let account = self.get_account(invoice.account_id).await?;
+            tracing::info!("Account: {:?}", account);
+
+            // Check for expired payment options and refresh them
+            let updated_options = crate::payment_options::update_expired_payment_options(
+                &invoice,
+                payment_options,
+                &account,
+                self
+            ).await.unwrap_or_else(|_| Vec::new()); // Return empty vec if refresh fails
+
+            Ok(Some((invoice, updated_options)))
         } else {
             Ok(None)
         }
@@ -76,39 +108,49 @@ impl SupabaseClient {
         webhook_url: Option<String>,
         redirect_url: Option<String>,
         memo: Option<String>,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync + 'static>> {
-        let new_invoice = serde_json::json!({
+    ) -> Result<serde_json::Value, anyhow::Error> {
+        let uid = format!("inv_{}", crate::payment::generate_uid());
+        let new_invoice = serde_json::json!([{
             "amount": amount,
             "currency": currency,
             "account_id": account_id,
             "status": "unpaid",
-            "uid": Uuid::new_v4().to_string(),
+            "uid": uid.clone(),
             "webhook_url": webhook_url,
             "redirect_url": redirect_url,
             "memo": memo,
+            "uri": format!("pay:?r=https://api.anypayx.com/r/{}", crate::payment::generate_uid()),
             "createdAt": Utc::now().to_rfc3339(),
-            "updatedAt": Utc::now().to_rfc3339()
-        });
+            "updatedAt": Utc::now().to_rfc3339(),
+        }]);
 
         tracing::info!("New invoice: {}", new_invoice);
 
-        let response = self.client
+        let response = self.client.as_ref()
             .from("invoices")
-            .insert(&serde_json::to_string(&new_invoice)?)
+            .insert(&serde_json::to_string(&new_invoice).map_err(|e| anyhow::anyhow!("Failed to serialize invoice: {}", e))?)
             .auth(&self.service_role_key)
             .execute()
-            .await.unwrap();
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create invoice: {}", e))?;
 
-        let response_text = response.text().await?;
-        tracing::info!("Response: {}", response_text);
+        let response_text = response.text()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to get response text: {}", e))?;
+        tracing::info!("Create invoice response: {}", response_text);
 
-        let invoices: Vec<Invoice> = serde_json::from_str(&response_text)?;
-        let invoice = invoices.into_iter().next().unwrap();
+        let invoices: Vec<Invoice> = serde_json::from_str(&response_text)
+            .map_err(|e| anyhow::anyhow!("Failed to parse invoice response: {}", e))?;
+        let invoice = invoices.into_iter().next()
+            .ok_or_else(|| anyhow::anyhow!("No invoice created"))?;
         
         // Get account and create payment options
-        let account = self.get_account(account_id).await.unwrap();
-        let payment_options = create_payment_options(&account, &invoice, self).await.unwrap();
-
+        let account = self.get_account(account_id)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to get account: {}", e))?;
+        let payment_options = create_payment_options(&account, &invoice, self)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create payment options: {}", e))?;
 
         Ok(json!({
             "invoice": invoice,
@@ -117,7 +159,7 @@ impl SupabaseClient {
     }
 
     pub async fn list_prices(&self) -> Result<Vec<Price>, Box<dyn std::error::Error>> {
-        let response = self.client
+        let response = self.client.as_ref()
             .from("prices")
             .select("*")
             .auth(&self.service_role_key)
@@ -132,7 +174,7 @@ impl SupabaseClient {
     }
 
     pub async fn get_account(&self, account_id: i64) -> Result<Account, Box<dyn std::error::Error>> {
-        let response = self.client
+        let response = self.client.as_ref()
             .from("accounts")
             .select("*")
             .eq("id", account_id.to_string())
@@ -146,7 +188,7 @@ impl SupabaseClient {
     }
 
     pub async fn list_available_addresses(&self, account: &Account) -> Result<Vec<Address>, Box<dyn std::error::Error + Send + Sync + 'static>> {
-        let response_text = self.client
+        let response_text = self.client.as_ref()
             .from("addresses")
             .select("*")
             .eq("account_id", account.id.to_string())
@@ -179,7 +221,7 @@ impl SupabaseClient {
         }
 
         // Load coins if cache is empty
-        let response = self.client
+        let response = self.client.as_ref()
             .from("coins")
             .select("*")
             .auth(&self.service_role_key)
@@ -202,7 +244,7 @@ impl SupabaseClient {
     }
 
     pub async fn get_coins(&self) -> Result<HashMap<String, Coin>, Box<dyn std::error::Error + Send + Sync + 'static>> {
-        let response = self.client
+        let response = self.client.as_ref()
             .from("coins")
             .select("*")
             .auth(&self.service_role_key)
@@ -240,14 +282,15 @@ impl SupabaseClient {
     }
 
     pub async fn create_payment_options(&self, options: &[PaymentOption]) -> Result<Vec<PaymentOption>, Box<dyn std::error::Error + Send + Sync + 'static>> {
-        let response = self.client
+        let response = self.client.as_ref()
             .from("payment_options")
-            .insert(&serde_json::to_string(options)?)
+            .insert(&serde_json::to_string(&serde_json::json!(options))?)
             .auth(&self.service_role_key)
             .execute()
             .await?;
 
         let response_text = response.text().await?;
+        tracing::info!("Create payment options response: {}", response_text);
         let inserted: Vec<PaymentOption> = serde_json::from_str(&response_text)?;
         
         Ok(inserted)
@@ -267,7 +310,7 @@ impl SupabaseClient {
     }
 
     pub async fn refresh_prices(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-        let response = self.client
+        let response = self.client.as_ref()
             .from("prices")
             .select("*")
             .auth(&self.service_role_key)
@@ -295,7 +338,7 @@ impl SupabaseClient {
     }
 
     pub async fn find_price(&self, base_currency: &str, currency: &str) -> Result<Option<Price>, Box<dyn std::error::Error + Send + Sync + 'static>> {
-        let response = self.client
+        let response = self.client.as_ref()
             .from("prices")
             .select("*")
             .eq("base_currency", base_currency)
@@ -311,7 +354,7 @@ impl SupabaseClient {
     }
 
     pub async fn update_invoice_status(&self, uid: &str, status: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.client
+        self.client.as_ref()
             .from("invoices")
             .update(&serde_json::to_string(&json!({
                 "status": status
@@ -324,7 +367,7 @@ impl SupabaseClient {
 
     pub async fn validate_api_key(&self, api_key: &str) -> Result<Option<i32>, Box<dyn std::error::Error>> {
         println!("api_key: {:?}", api_key);
-        let response = self.client
+        let response = self.client.as_ref()
             .from("access_tokens")
             .select("account_id")
             .eq("uid", api_key)
@@ -343,7 +386,7 @@ impl SupabaseClient {
     pub async fn cancel_invoice(&self, uid: &str, account_id: i32) -> Result<(), Box<dyn std::error::Error>> {
         // First fetch invoice to check ownership
         println!("Cancelling invoice: {:?}", uid);
-        let invoice = self.get_invoice(uid, true).await?
+        let (invoice, _) = self.get_invoice(uid, true).await?
             .ok_or("Invoice not found")?;
 
         // Verify ownership
@@ -385,5 +428,14 @@ pub async fn convert(
         converted
     );
 
+    // Apply precision if specified
+    /*let result = if let Some(p) = precision {
+        let factor = 10f64.powi(p);
+        (converted * factor).round() / factor
+    } else {
+        converted
+    };
+
+    Ok(result)*/
     Ok(converted)
 }

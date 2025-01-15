@@ -1,23 +1,27 @@
-use tokio_tungstenite::tungstenite::Message as WsMessage;
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
-use uuid::Uuid;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 use futures::channel::mpsc::UnboundedSender;
+use uuid::Uuid;
+use crate::types::Subscription;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Session {
     pub id: Uuid,
     pub sender: UnboundedSender<WsMessage>,
     pub account_id: Option<i32>,
     pub auth_token: Option<String>,
+    pub subscriptions: HashSet<Subscription>,
 }
 
 impl Session {
     pub fn new(id: Uuid, sender: UnboundedSender<WsMessage>) -> Self {
-        Self {
+        Session {
             id,
             sender,
             account_id: None,
             auth_token: None,
+            subscriptions: HashSet::new(),
         }
     }
 
@@ -31,6 +35,18 @@ impl Session {
 
     pub fn send(&self, message: WsMessage) -> Result<(), Box<dyn std::error::Error>> {
         Ok(self.sender.unbounded_send(message)?)
+    }
+
+    pub fn add_subscription(&mut self, subscription: Subscription) {
+        self.subscriptions.insert(subscription);
+    }
+
+    pub fn remove_subscription(&mut self, subscription: &Subscription) {
+        self.subscriptions.remove(subscription);
+    }
+
+    pub fn has_subscription(&self, subscription: &Subscription) -> bool {
+        self.subscriptions.contains(subscription)
     }
 }
 

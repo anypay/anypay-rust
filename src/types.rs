@@ -98,25 +98,21 @@ pub struct CreateInvoiceRequest {
     pub memo: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Invoice {
-    pub id: i64,    
+    pub id: i64,
     pub uid: String,
     pub amount: i64,
     pub currency: String,
     pub status: String,
-    #[serde(rename = "createdAt")]
-    pub created_at: String,
-    #[serde(rename = "updatedAt")]
-    pub updated_at: String,
     pub account_id: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub address: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hash: Option<String>,
-    #[serde(default)]
-    pub complete: bool,
-    // Add other optional fields as needed...
+    pub complete: Option<bool>,
+    pub webhook_url: Option<String>,
+    pub redirect_url: Option<String>,
+    pub memo: Option<String>,
+    pub uri: String,
+    pub createdAt: String,
+    pub updatedAt: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -159,14 +155,7 @@ pub struct PaymentRequest {
     pub options: Option<PaymentOptions>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Output {
-    pub address: String,
-    pub amount: i64,
-}
-
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PaymentOption {
     pub invoice_uid: String,
     pub currency: String,
@@ -176,8 +165,17 @@ pub struct PaymentOption {
     pub outputs: Vec<Output>,
     pub uri: String,
     pub fee: i64,
-    pub createdAt: chrono::DateTime<chrono::Utc>,
-    pub updatedAt: chrono::DateTime<chrono::Utc>,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+    pub expires: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Output {
+    pub address: String,
+    pub amount: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

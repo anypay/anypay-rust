@@ -83,7 +83,10 @@ impl AnypayEventsServer {
                 match supabase.get_invoice(&id, true).await {
                     Ok(Some(invoice)) => json!({
                         "status": "success",
-                        "data": invoice
+                        "data": {
+                            "invoice": invoice.0,
+                            "payment_options": invoice.1
+                        }
                     }),
                     Ok(None) => json!({
                         "status": "error",

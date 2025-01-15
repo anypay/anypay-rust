@@ -72,8 +72,12 @@ impl HttpServer {
             .route("/api/v1/invoices/:invoice_id", get({
                 let supabase = supabase.clone();
                 move |Path(invoice_id): Path<String>| async move {
+                    tracing::info!("Fetching invoice with id: {}", invoice_id);
                     match supabase.get_invoice(&invoice_id, true).await {
-                        Ok(Some(invoice)) => Ok(Json(InvoiceResponse { invoice, payment_options: todo!() })),
+                        Ok(Some(result)) => {
+                            tracing::info!("Invoice fetched successfully: {:?}", result);
+                            Ok(Json(InvoiceResponse { invoice: result.0, payment_options: result.1 }))
+                        }
                         Ok(None) => Err(StatusCode::NOT_FOUND),
                         Err(e) => {
                             tracing::error!("Error fetching invoice: {}", e);

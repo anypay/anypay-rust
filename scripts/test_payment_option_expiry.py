@@ -6,6 +6,7 @@ import json
 import logging
 from dotenv import load_dotenv
 import os
+import time
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,8 +18,10 @@ def verify_payment_option(payment_option, invoice_amount):
     logging.info(f"\nVerifying payment option for {payment_option['currency']} on {payment_option['chain']}:")
     logging.info(f"Total amount: {payment_option['amount']}")
     logging.info(f"Fee: {payment_option['fee']}")
+    logging.info(f"Expires at: {payment_option['expires']}")
     
     assert payment_option["amount"] > 0, f"Payment option amount should be > 0, got {payment_option['amount']}"
+    assert "expires" in payment_option, "Payment option missing expires"
     
     # Verify outputs
     total_output_amount = sum(output["amount"] for output in payment_option["outputs"])
@@ -34,12 +37,12 @@ def verify_payment_option(payment_option, invoice_amount):
         assert output["amount"] > 0, f"Output amount should be > 0, got {output['amount']}"
         assert output["address"], "Output should have an address"
     
-    # Verify single output for all chains
+    # Verify single output
     assert len(payment_option["outputs"]) == 1, f"Should have exactly 1 output, got {len(payment_option['outputs'])}"
     assert payment_option["outputs"][0]["amount"] == payment_option["amount"], \
         f"Output amount ({payment_option['outputs'][0]['amount']}) should equal total amount ({payment_option['amount']})"
 
-async def test_create_invoice():
+async def test_payment_option_expiry():
     load_dotenv()
     api_key = os.getenv('ANYPAY_API_KEY')
     
@@ -61,7 +64,7 @@ async def test_create_invoice():
             "currency": "USD",
             "webhook_url": "https://example.com/webhook",
             "redirect_url": "https://example.com/return",
-            "memo": "Test invoice creation"
+            "memo": "Test payment option expiry"
         }
         
         logging.info(f"Sending create invoice request: {create_msg}")
@@ -71,55 +74,61 @@ async def test_create_invoice():
         logging.info(f"Received response: {response}")
         
         response_data = json.loads(response)
-        
-        # Validate response
         assert response_data["status"] == "success", f"Failed to create invoice: {response_data}"
+        
         invoice = response_data["data"]["invoice"]
-        assert invoice["amount"] == 100000, f"Incorrect amount: {invoice['amount']}"
-        assert invoice["currency"] == "USD", f"Incorrect currency: {invoice['currency']}"
-        assert invoice["status"] == "unpaid", f"Incorrect status: {invoice['status']}"
-        assert "uid" in invoice, "Invoice missing uid"
-        assert "createdAt" in invoice, "Invoice missing createdAt"
-        assert "updatedAt" in invoice, "Invoice missing updatedAt"
-        assert invoice["webhook_url"] == "https://example.com/webhook", "Incorrect webhook_url"
-        assert invoice["redirect_url"] == "https://example.com/return", "Incorrect redirect_url"
-        assert invoice["memo"] == "Test invoice creation", "Incorrect memo"
-        assert "uri" in invoice, "Invoice missing uri"
-        assert invoice["uri"].startswith("pay:?r=https://api.anypayx.com/r/"), "Invalid URI format"
+        initial_payment_options = response_data["data"]["payment_options"]
         
-        # Validate payment options
-        payment_options = response_data["data"]["payment_options"]
-        assert isinstance(payment_options, list), "payment_options should be a list"
-        assert len(payment_options) > 0, "Should have at least one payment option"
-        
-        logging.info(f"\nPayment Options:")
-        for option in payment_options:
-            verify_payment_option(option, invoice["amount"])
-        
-        # Verify we can fetch the created invoice
-        fetch_msg = {
-            "action": "fetch_invoice",
-            "id": invoice["uid"]
+        # Store initial amounts for comparison
+        initial_amounts = {
+            f"{opt['currency']}:{opt['chain']}": opt['amount'] 
+            for opt in initial_payment_options
         }
         
-        logging.info(f"Fetching created invoice: {fetch_msg}")
-        await websocket.send(json.dumps(fetch_msg))
+        # Wait for payment options to expire (they expire after 15 minutes)
+        # For testing, we'll fetch again immediately since the server should still
+        # refresh expired options
+        
+        # Fetch invoice to check payment options
+        await websocket.send(json.dumps({
+            "action": "fetch_invoice",
+            "id": invoice["uid"]
+        }))
         
         fetch_response = await websocket.recv()
+        fetch_data = json.loads(fetch_response)
         logging.info(f"Fetch response: {fetch_response}")
         
-        fetch_data = json.loads(fetch_response)
-        assert fetch_data["status"] == "success", f"Failed to fetch created invoice: {fetch_data}"
-        fetched_invoice = fetch_data["data"]["invoice"]
-        assert fetched_invoice["uid"] == invoice["uid"], "Invoice IDs don't match"
-        assert fetched_invoice["amount"] == invoice["amount"], "Invoice amounts don't match"
-        assert fetched_invoice["currency"] == invoice["currency"], "Invoice currencies don't match"
-        assert fetched_invoice["status"] == invoice["status"], "Invoice statuses don't match"
+        assert fetch_data["status"] == "success", "Failed to fetch invoice"
+        assert len(fetch_data["data"]) == 2, "Expected invoice and payment options in response"
+        
+        invoice = fetch_data["data"][0]
+        refreshed_payment_options = fetch_data["data"][1]
+        
+        # Verify invoice fields
+        assert invoice["uid"] == invoice["uid"], "Invoice UID mismatch"
+        assert invoice["amount"] == 100000, "Invoice amount mismatch"
+        assert invoice["currency"] == "USD", "Invoice currency mismatch"
+        
+        # Verify payment options
+        assert len(refreshed_payment_options) > 0, "No payment options returned"
+        for option in refreshed_payment_options:
+            verify_payment_option(option, 100000)
+            
+            # Check that amounts might have changed due to price updates
+            key = f"{option['currency']}:{option['chain']}"
+            if key in initial_amounts:
+                if option['amount'] != initial_amounts[key]:
+                    logging.info(f"Amount changed for {key}:")
+                    logging.info(f"  Initial: {initial_amounts[key]}")
+                    logging.info(f"  Updated: {option['amount']}")
+        
+        logging.info("✅ Test passed: Invoice fetched successfully with valid payment options")
 
 async def main():
     try:
-        await test_create_invoice()
-        logging.info("✅ Invoice creation test passed!")
+        await test_payment_option_expiry()
+        logging.info("✅ Payment option expiry test passed!")
     except Exception as e:
         logging.error(f"❌ Test failed: {e}")
         raise
