@@ -1,5 +1,7 @@
 [package]
 name = "anypay"
+description = "AnyPay is a payment processing platform that allows you to accept payments from multiple cryptocurrencies and fiat currencies."
+license-file = "LICENSE"
 version = "0.1.0"
 edition = "2021"
 
