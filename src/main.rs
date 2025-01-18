@@ -24,9 +24,10 @@ use amqp::AmqpClient;
 use xrpl::XRPLClient;
 use config::Config;
 use ethereum::EthereumClient;
+use anyhow::Result;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     dotenv().ok();
 
     // Initialize logging
@@ -45,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize AMQP if configured
     if let Some(amqp_url) = &config.amqp_url {
         tracing::info!("Connecting to AMQP...");
-        AmqpClient::new(amqp_url).await?;
+        let _amqp = AmqpClient::new(amqp_url).await?;
         tracing::info!("✅ AMQP Connected");
     }
 

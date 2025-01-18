@@ -2,6 +2,7 @@ use alloy::providers::{Provider, ProviderBuilder, WsConnect};
 use alloy::pubsub::PubSubFrontend;
 use futures_util::StreamExt;
 use std::sync::Arc;
+use anyhow::Result;
 
 pub struct EthereumClient {
     provider: Arc<dyn Provider<PubSubFrontend>>,
@@ -9,7 +10,7 @@ pub struct EthereumClient {
 }
 
 impl EthereumClient {
-    pub async fn new(chain: &str, ws_url: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(chain: &str, ws_url: &str) -> Result<Self> {
         let ws = WsConnect::new(ws_url);
         let provider = ProviderBuilder::new().on_ws(ws).await?;
         
@@ -19,7 +20,7 @@ impl EthereumClient {
         })
     }
 
-    pub async fn subscribe_blocks(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn subscribe_blocks(&self) -> Result<()> {
         let sub = self.provider.subscribe_blocks().await?;
         let mut stream = sub.into_stream();
         let chain = self.chain.clone();
@@ -34,7 +35,7 @@ impl EthereumClient {
         // Keep the subscription alive
         tokio::spawn(async move {
             handle.await?;
-            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+            Ok::<_, anyhow::Error>(())
         });
 
         Ok(())

@@ -8,6 +8,7 @@ use lazy_static::lazy_static;
 use std::collections::HashMap;
 use tokio::time::{interval, Duration};
 use std::sync::Arc;
+use anyhow::{Result, anyhow};
 
 use crate::{payment::ConversionRequest, payment_options::create_payment_options, types::{Account, Address, Coin, CreateInvoiceRequest, Invoice, PaymentOption, Price}};
 
@@ -43,7 +44,7 @@ impl SupabaseClient {
         }
     }
 
-    pub async fn get_invoice(&self, invoice_id: &str, use_service_role: bool) -> Result<Option<(Invoice, Vec<PaymentOption>)>, Box<dyn std::error::Error>> {
+    pub async fn get_invoice(&self, invoice_id: &str, use_service_role: bool) -> Result<Option<(Invoice, Vec<PaymentOption>)>> {
         let auth_key = if use_service_role {
             &self.service_role_key
         } else {
@@ -59,13 +60,16 @@ impl SupabaseClient {
             .eq("uid", invoice_id)
             .auth(self.service_role_key.to_string())
             .execute()
-            .await?;
+            .await
+            .map_err(|e| anyhow!("Failed to fetch invoice: {}", e))?;
 
         tracing::info!("Invoice response: {:?}", response);
 
-        let response_text = response.text().await?;
+        let response_text = response.text().await
+            .map_err(|e| anyhow!("Failed to read response: {}", e))?;
         tracing::info!("Invoice response text: {:?}", response_text);
-        let invoices: Vec<Invoice> = serde_json::from_str(&response_text)?;
+        let invoices: Vec<Invoice> = serde_json::from_str(&response_text)
+            .map_err(|e| anyhow!("Failed to parse invoice: {}", e))?;
 
         tracing::info!("Invoices: {:?}", invoices);
         
@@ -77,10 +81,13 @@ impl SupabaseClient {
                 .eq("invoice_uid", invoice_id)
                 .auth(auth_key)
                 .execute()
-                .await?;
+                .await
+                .map_err(|e| anyhow!("Failed to fetch payment options: {}", e))?;
 
-            let response_text = response.text().await?;
-            let payment_options: Vec<PaymentOption> = serde_json::from_str(&response_text)?;
+            let response_text = response.text().await
+                .map_err(|e| anyhow!("Failed to read response: {}", e))?;
+            let payment_options: Vec<PaymentOption> = serde_json::from_str(&response_text)
+                .map_err(|e| anyhow!("Failed to parse payment options: {}", e))?;
 
             // Get account for refreshing payment options
             let account = self.get_account(invoice.account_id).await?;
@@ -108,7 +115,7 @@ impl SupabaseClient {
         webhook_url: Option<String>,
         redirect_url: Option<String>,
         memo: Option<String>,
-    ) -> Result<serde_json::Value, anyhow::Error> {
+    ) -> Result<serde_json::Value> {
         let uid = format!("inv_{}", crate::payment::generate_uid());
         let new_invoice = serde_json::json!([{
             "amount": amount,
@@ -128,29 +135,29 @@ impl SupabaseClient {
 
         let response = self.client.as_ref()
             .from("invoices")
-            .insert(&serde_json::to_string(&new_invoice).map_err(|e| anyhow::anyhow!("Failed to serialize invoice: {}", e))?)
+            .insert(&serde_json::to_string(&new_invoice).map_err(|e| anyhow!("Failed to serialize invoice: {}", e))?)
             .auth(&self.service_role_key)
             .execute()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to create invoice: {}", e))?;
+            .map_err(|e| anyhow!("Failed to create invoice: {}", e))?;
 
         let response_text = response.text()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to get response text: {}", e))?;
+            .map_err(|e| anyhow!("Failed to get response text: {}", e))?;
         tracing::info!("Create invoice response: {}", response_text);
 
         let invoices: Vec<Invoice> = serde_json::from_str(&response_text)
-            .map_err(|e| anyhow::anyhow!("Failed to parse invoice response: {}", e))?;
+            .map_err(|e| anyhow!("Failed to parse invoice response: {}", e))?;
         let invoice = invoices.into_iter().next()
-            .ok_or_else(|| anyhow::anyhow!("No invoice created"))?;
+            .ok_or_else(|| anyhow!("No invoice created"))?;
         
         // Get account and create payment options
         let account = self.get_account(account_id)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to get account: {}", e))?;
+            .map_err(|e| anyhow!("Failed to get account: {}", e))?;
         let payment_options = create_payment_options(&account, &invoice, self)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to create payment options: {}", e))?;
+            .map_err(|e| anyhow!("Failed to create payment options: {}", e))?;
 
         Ok(json!({
             "invoice": invoice,
@@ -158,36 +165,43 @@ impl SupabaseClient {
         }))
     }
 
-    pub async fn list_prices(&self) -> Result<Vec<Price>, Box<dyn std::error::Error>> {
+    pub async fn list_prices(&self) -> Result<Vec<Price>> {
         let response = self.client.as_ref()
             .from("prices")
             .select("*")
             .auth(&self.service_role_key)
             .execute()
-            .await?;
+            .await
+            .map_err(|e| anyhow!("Failed to fetch prices: {}", e))?;
 
-        let response_text = response.text().await?;
-        tracing::info!("List prices response: {}", response_text);
+        let text = response.text().await
+            .map_err(|e| anyhow!("Failed to read response: {}", e))?;
 
-        let prices = serde_json::from_str::<Vec<Price>>(&response_text)?;
+        let prices = serde_json::from_str::<Vec<Price>>(&text)
+            .map_err(|e| anyhow!("Failed to parse prices: {}", e))?;
         Ok(prices)
     }
 
-    pub async fn get_account(&self, account_id: i64) -> Result<Account, Box<dyn std::error::Error>> {
+    pub async fn get_account(&self, account_id: i64) -> Result<Account> {
         let response = self.client.as_ref()
             .from("accounts")
             .select("*")
             .eq("id", account_id.to_string())
             .auth(&self.service_role_key)
             .execute()
-            .await?;
+            .await
+            .map_err(|e| anyhow!("Failed to fetch account: {}", e))?;
 
-        let accounts: Vec<Account> = serde_json::from_str(&response.text().await?)?;
+        let text = response.text().await
+            .map_err(|e| anyhow!("Failed to read response: {}", e))?;
+
+        let accounts: Vec<Account> = serde_json::from_str(&text)
+            .map_err(|e| anyhow!("Failed to parse account: {}", e))?;
         accounts.into_iter().next()
-            .ok_or_else(|| "Account not found".into())
+            .ok_or_else(|| anyhow!("Account not found"))
     }
 
-    pub async fn list_available_addresses(&self, account: &Account) -> Result<Vec<Address>, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    pub async fn list_available_addresses(&self, account: &Account) -> Result<Vec<Address>> {
         let response_text = self.client.as_ref()
             .from("addresses")
             .select("*")
@@ -214,7 +228,7 @@ impl SupabaseClient {
         Ok(available)
     }
 
-    async fn ensure_coins_loaded(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    async fn ensure_coins_loaded(&self) -> Result<()> {
         // Check if cache is already loaded
         if COIN_CACHE.read().unwrap().is_some() {
             return Ok(());
@@ -243,7 +257,7 @@ impl SupabaseClient {
         Ok(())
     }
 
-    pub async fn get_coins(&self) -> Result<HashMap<String, Coin>, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    pub async fn get_coins(&self) -> Result<HashMap<String, Coin>> {
         let response = self.client.as_ref()
             .from("coins")
             .select("*")
@@ -263,7 +277,7 @@ impl SupabaseClient {
         Ok(coin_map)
     }
 
-    pub async fn get_coin(&self, currency: &str, chain: &str) -> Result<Option<Coin>, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    pub async fn get_coin(&self, currency: &str, chain: &str) -> Result<Option<Coin>> {
         self.ensure_coins_loaded().await?;
         
         Ok(COIN_CACHE.read().unwrap()
@@ -272,7 +286,7 @@ impl SupabaseClient {
             .cloned()))
     }
 
-    pub async fn refresh_coins(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    pub async fn refresh_coins(&self) -> Result<()> {
         // Force reload coins
         let mut cache = COIN_CACHE.write().unwrap();
         *cache = None;
@@ -281,7 +295,7 @@ impl SupabaseClient {
         self.ensure_coins_loaded().await
     }
 
-    pub async fn create_payment_options(&self, options: &[PaymentOption]) -> Result<Vec<PaymentOption>, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    pub async fn create_payment_options(&self, options: &[PaymentOption]) -> Result<Vec<PaymentOption>> {
         let response = self.client.as_ref()
             .from("payment_options")
             .insert(&serde_json::to_string(&serde_json::json!(options))?)
@@ -309,7 +323,7 @@ impl SupabaseClient {
         });
     }
 
-    pub async fn refresh_prices(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    pub async fn refresh_prices(&self) -> Result<()> {
         let response = self.client.as_ref()
             .from("prices")
             .select("*")
@@ -337,7 +351,7 @@ impl SupabaseClient {
             .cloned()
     }
 
-    pub async fn find_price(&self, base_currency: &str, currency: &str) -> Result<Option<Price>, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    pub async fn find_price(&self, base_currency: &str, currency: &str) -> Result<Option<Price>> {
         let response = self.client.as_ref()
             .from("prices")
             .select("*")
@@ -353,7 +367,7 @@ impl SupabaseClient {
         Ok(prices.into_iter().next())
     }
 
-    pub async fn update_invoice_status(&self, uid: &str, status: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn update_invoice_status(&self, uid: &str, status: &str) -> Result<()> {
         self.client.as_ref()
             .from("invoices")
             .update(&serde_json::to_string(&json!({
@@ -365,7 +379,7 @@ impl SupabaseClient {
         Ok(())
     }
 
-    pub async fn validate_api_key(&self, api_key: &str) -> Result<Option<i32>, Box<dyn std::error::Error>> {
+    pub async fn validate_api_key(&self, api_key: &str) -> Result<Option<i32>> {
         println!("api_key: {:?}", api_key);
         let response = self.client.as_ref()
             .from("access_tokens")
@@ -383,15 +397,15 @@ impl SupabaseClient {
         Ok(data.get("account_id").and_then(|v| v.as_i64()).map(|id| id as i32))
     }
 
-    pub async fn cancel_invoice(&self, uid: &str, account_id: i32) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn cancel_invoice(&self, uid: &str, account_id: i32) -> Result<()> {
         // First fetch invoice to check ownership
         println!("Cancelling invoice: {:?}", uid);
         let (invoice, _) = self.get_invoice(uid, true).await?
-            .ok_or("Invoice not found")?;
+            .ok_or(anyhow!("Invoice not found"))?;
 
         // Verify ownership
         if invoice.account_id as i32 != account_id {
-            return Err("Unauthorized to cancel this invoice".into());
+            return Err(anyhow!("Unauthorized to cancel this invoice"));
         }
 
         // Update status to cancelled
@@ -407,12 +421,12 @@ pub async fn convert(
     to_currency: &str,
     precision: Option<i32>,
     supabase: &SupabaseClient,
-) -> Result<f64, anyhow::Error> {
+) -> Result<f64> {
     let from_price = supabase.get_cached_price(&req.currency)
-        .ok_or_else(|| anyhow::anyhow!("Price not found for {}", req.currency))?;
+        .ok_or_else(|| anyhow!("Price not found for {}", req.currency))?;
     
     let to_price = supabase.get_cached_price(to_currency)
-        .ok_or_else(|| anyhow::anyhow!("Price not found for {}", to_currency))?;
+        .ok_or_else(|| anyhow!("Price not found for {}", to_currency))?;
 
     // Convert through USD
     let usd_value = req.value * from_price.value;

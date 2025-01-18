@@ -17,6 +17,7 @@ use crate::types::Message;
 use crate::supabase::SupabaseClient;
 use crate::prices::{ConversionRequest, convert};
 use crate::invoices;
+use anyhow::Result;
 
 pub struct AnypayEventsServer {
     event_dispatcher: Arc<EventDispatcher>,
@@ -35,7 +36,7 @@ impl AnypayEventsServer {
         }
     }
 
-    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&self) -> Result<()> {
         let listener = TcpListener::bind(&self.addr).await?;
         tracing::info!("WebSocket server listening on: {}", self.addr);
 
