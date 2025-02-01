@@ -13,6 +13,10 @@ path = "src/bin/anypay-client.rs"
 name = "anypay-server"
 path = "src/bin/anypay-server.rs"
 
+[[bin]]
+name = "anypay-wallet"
+path = "src/bin/anypay-wallet.rs"
+
 [dependencies]
 tokio = { version = "1.0", features = ["full"] }
 tokio-tungstenite = "0.23.1"
@@ -42,8 +46,13 @@ clap = { version = "4.4", features = ["derive", "env"] }
 reqwest = { version = "0.11", features = ["json"] }
 base64 = "0.21"
 async-trait = "0.1"
-bitcoin = "0.31"
 hex = "0.4"
+
+# Bitcoin and wallet dependencies
+bitcoin = { version = "0.31", features = ["rand", "serde"] }
+bip32 = { version = "0.5", features = ["secp256k1", "alloc"] }
+secp256k1 = { version = "0.28", features = ["rand"] }
+rand_core = "0.6"
 
 [profile.release]
 opt-level = 3

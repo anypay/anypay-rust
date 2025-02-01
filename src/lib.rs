@@ -14,3 +14,5 @@ pub mod ethereum;
 pub mod xrpl;
 pub mod uri;
 pub mod plugin;
+pub mod wallet;
+pub mod client;
