@@ -19,7 +19,7 @@ pub struct Card {
     pub currency: String,
     pub network: Network,
     pub derivation_path: String,
-    pub address: Address,
+    pub address: String,
     pub private_key: XPrv,
     pub public_key: XPub,
 }
@@ -66,7 +66,7 @@ impl Wallet {
             ("BTC", "BTC") => 0,
             ("ETH", "ETH") => 60,
             ("BSV", "BSV") => 236,
-            ("XRP", "XRP") => 144,
+            ("XRPL", "XRP") => 144,
             _ => return Err(anyhow!("Unsupported chain/currency combination: {}/{}", chain, currency))
         };
 
@@ -84,8 +84,11 @@ impl Wallet {
         // Generate address (currently only supports Bitcoin-style addresses)
         let pubkey_bytes = public_key.to_bytes();
         let address = match chain {
-            "BTC" => Address::p2wpkh(&bitcoin::PublicKey::from_slice(&pubkey_bytes)?, network)
-                .map_err(|e| anyhow!("Failed to generate Bitcoin address: {}", e))?,
+            "BTC" => Address::p2wpkh(&bitcoin::PublicKey::from_slice(&pubkey_bytes)?, network).unwrap().to_string(),                
+            "XRPL" => {
+                let wallet = xrpl::wallet::Wallet::create(None).expect("Failed to generate new wallet");                
+                wallet.public_key.to_string()
+            }
             // TODO: Add support for other chain address formats
             _ => return Err(anyhow!("Address generation not yet implemented for chain: {}", chain))
         };
@@ -95,7 +98,7 @@ impl Wallet {
             currency: currency.to_string(),
             network,
             derivation_path: path,
-            address,
+            address: address.to_string(),
             private_key,
             public_key,
         })

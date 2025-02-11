@@ -1,10 +1,11 @@
 use anyhow::{Result, anyhow};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, ACCEPT};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use bitcoin::Transaction;
 
 const DEFAULT_API_URL: &str = "https://api.anypayx.com";
+const MEMPOOL_API_URL: &str = "https://mempool.space/api";
 
 #[derive(Debug, Deserialize)]
 pub struct Invoice {
@@ -12,8 +13,13 @@ pub struct Invoice {
     pub status: String,
     pub currency: String,
     pub amount: f64,
-    pub merchant_name: String,
-    pub payment_options: Option<PaymentOptions>,
+    pub uri: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    #[serde(rename = "expiresAt")]
+    pub expires_at: Option<String>,
+    pub payment_options: Vec<PaymentOption>,
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -23,20 +29,52 @@ pub struct PaymentOptions {
 
 #[derive(Debug, Deserialize)]
 pub struct PaymentOption {
+    pub time: String,
+    pub expires: String,
+    pub memo: String,
+    #[serde(rename = "paymentUrl")]
+    pub payment_url: String,
+    #[serde(rename = "paymentId")]
+    pub payment_id: String,
     pub chain: String,
     pub currency: String,
+    pub network: String,
     pub instructions: Vec<PaymentInstruction>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct PaymentInstruction {
+    #[serde(rename = "type")]
+    pub instruction_type: String,
+    #[serde(rename = "requiredFeeRate")]
+    pub required_fee_rate: u32,
     pub outputs: Vec<Output>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Output {
     pub address: String,
-    pub amount: f64,
+    pub amount: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PriceResponse {
+    pub price: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct MempoolUtxoStatus {
+    confirmed: bool,
+    block_height: Option<u32>,
+    block_time: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MempoolUtxo {
+    txid: String,
+    vout: u32,
+    value: u64,
+    status: MempoolUtxoStatus,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -49,8 +87,18 @@ pub struct Utxo {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct PriceResponse {
-    pub price: f64,
+pub struct Price {
+    pub currency: String,
+    pub base_currency: String,
+    pub value: String,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+    pub source: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PriceList {
+    pub prices: Vec<Price>,
 }
 
 pub struct AnypayClient {
@@ -81,7 +129,7 @@ impl AnypayClient {
 
     pub async fn get_invoice(&self, uid: &str) -> Result<Invoice> {
         let response = self.client
-            .get(&format!("{}/i/{}", self.api_url, uid))
+            .get(&format!("{}/api/v1/invoices/{}", self.api_url, uid))
             .send()
             .await?;
 
@@ -98,18 +146,80 @@ impl AnypayClient {
             .map_err(|e| anyhow!("Failed to parse invoice: {}", e))
     }
 
-    pub async fn get_utxos(&self, address: &str) -> Result<Vec<Utxo>> {
+    pub async fn get_payment_option(&self, uid: &str, chain: &str, currency: &str) -> Result<Invoice> {
+        let payload = serde_json::json!({
+            "chain": chain,
+            "currency": currency
+        });
+
         let response = self.client
-            .get(&format!("{}/api/v1/utxos/{}", self.api_url, address))
+            .post(&format!("{}/i/{}", self.api_url, uid))
+            .header("content-type", "application/payment-request")
+            .header("x-currency", currency)
+            .header("x-chain", chain)
+            .json(&payload)
             .send()
             .await?;
 
         if !response.status().is_success() {
             let error = response.text().await?;
-            return Err(anyhow!("Failed to fetch UTXOs: {}", error));
+            return Err(anyhow!("Failed to fetch payment options: {}", error));
         }
 
-        let utxos = response.json::<Vec<Utxo>>().await?;
+        let data = response.json::<serde_json::Value>().await?;
+        let invoice = data.get("invoice")
+            .ok_or_else(|| anyhow!("Invalid response format: missing invoice field"))?;
+        
+        serde_json::from_value(invoice.clone())
+            .map_err(|e| anyhow!("Failed to parse invoice with payment options: {}", e))
+    }
+
+    pub async fn get_utxos(&self, address: &str) -> Result<Vec<Utxo>> {
+        let response = reqwest::Client::new()
+            .get(&format!("{}/address/{}/utxo", MEMPOOL_API_URL, address))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error = response.text().await?;
+            return Err(anyhow!("Failed to fetch UTXOs from mempool.space: {}", error));
+        }
+
+        let mempool_utxos = response.json::<Vec<MempoolUtxo>>().await?;
+        
+        // Get the current block height for calculating confirmations
+        let tip_response = reqwest::Client::new()
+            .get(&format!("{}/blocks/tip/height", MEMPOOL_API_URL))
+            .send()
+            .await?;
+
+        let current_height = if tip_response.status().is_success() {
+            tip_response.text().await?.parse::<u32>().unwrap_or(0)
+        } else {
+            0
+        };
+
+        // Convert mempool UTXOs to our format
+        let utxos = mempool_utxos.into_iter()
+            .map(|u| {
+                let confirmations = if u.status.confirmed {
+                    u.status.block_height
+                        .map(|height| current_height.saturating_sub(height) + 1)
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+
+                Utxo {
+                    txid: u.txid,
+                    vout: u.vout,
+                    amount: u.value as f64 / 100_000_000.0, // Convert satoshis to BTC
+                    confirmations,
+                    script_pub_key: String::new(), // Mempool API doesn't provide scriptPubKey
+                }
+            })
+            .collect();
+
         Ok(utxos)
     }
 
@@ -137,18 +247,38 @@ impl AnypayClient {
         Ok(())
     }
 
-    pub async fn get_btc_price(&self) -> Result<f64> {
+    pub async fn get_prices(&self) -> Result<PriceList> {
         let response = self.client
-            .get("https://api.anypayx.com/api/v1/prices/BTC/USD")
+            .get(&format!("{}/api/v1/prices", self.api_url))
             .send()
             .await?;
 
         if !response.status().is_success() {
             let error = response.text().await?;
-            return Err(anyhow!("Failed to fetch BTC price: {}", error));
+            return Err(anyhow!("Failed to fetch prices: {}", error));
         }
 
-        let price = response.json::<PriceResponse>().await?;
-        Ok(price.price)
+        let prices = response.json::<PriceList>().await?;
+        Ok(prices)
+    }
+
+    pub async fn get_btc_price(&self) -> Result<f64> {
+        let prices = self.get_prices().await?;
+        let btc_price = prices.prices.iter()
+            .find(|p| p.currency == "BTC" && p.base_currency == "USD")
+            .ok_or_else(|| anyhow!("BTC price not found"))?;
+        
+        btc_price.value.parse::<f64>()
+            .map_err(|e| anyhow!("Failed to parse BTC price: {}", e))
+    }
+
+    pub async fn get_price(&self, currency: &str) -> Result<f64> {
+        let prices = self.get_prices().await?;
+        let price = prices.prices.iter()
+            .find(|p| p.currency == currency && p.base_currency == "USD")
+            .ok_or_else(|| anyhow!("Price not found for currency: {}", currency))?;
+        
+        price.value.parse::<f64>()
+            .map_err(|e| anyhow!("Failed to parse price: {}", e))
     }
 } 

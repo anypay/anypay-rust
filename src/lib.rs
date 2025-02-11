@@ -16,3 +16,4 @@ pub mod uri;
 pub mod plugin;
 pub mod wallet;
 pub mod client;
+pub mod cards;

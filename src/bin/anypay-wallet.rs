@@ -3,6 +3,7 @@ use bitcoin::Network;
 use anyhow::{Result, anyhow};
 use anypay::wallet::Wallet;
 use anypay::client::AnypayClient;
+use serde_json::json;
 use url::Url;
 use std::env;
 use bitcoin::{
@@ -18,6 +19,7 @@ use bitcoin::hashes::hex::FromHex;
 use bitcoin::psbt::Psbt;
 use anypay::client::Utxo;
 use std::str::FromStr;
+use bitcoin::address::Payload;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -154,7 +156,7 @@ async fn main() -> Result<()> {
             println!("- BTC/BTC (Bitcoin)");
             println!("- ETH/ETH (Ethereum)");
             println!("- BSV/BSV (Bitcoin SV)");
-            println!("- XRP/XRP (Ripple)");
+            println!("- XRPL/XRP (Ripple)");
             println!("\nUse the create-card command to generate addresses for specific chains");
             Ok(())
         }
@@ -211,12 +213,11 @@ async fn main() -> Result<()> {
             let invoice_details = fetch_invoice_details(&invoice_uid).await?;
             println!("\n📄 Invoice Details:");
             println!("Invoice ID: {}", invoice_details.uid);
-            println!("Merchant: {}", invoice_details.merchant);
             println!("\nPayment Options:");
             for (i, output) in invoice_details.outputs.iter().enumerate() {
                 println!("{}. {} {} to {}", 
                     i + 1,
-                    output.amount,
+                    if output.currency == "BTC" { format!("{} sats", output.amount) } else { output.amount.to_string() },
                     output.currency,
                     output.address
                 );
@@ -229,15 +230,15 @@ async fn main() -> Result<()> {
 
             // Confirm payment
             println!("\nPay {} {} to {} using {}? (y/N)", 
-                matching_output.amount,
-                matching_output.currency,
+                if currency == "BTC" { format!("{} sats", matching_output.amount) } else { matching_output.amount.to_string() },
+                currency,
                 matching_output.address,
                 card.address);
 
             let mut input = String::new();
             std::io::stdin().read_line(&mut input)?;
             if input.trim().to_lowercase() == "y" {
-                pay_invoice(&card, &invoice_details, matching_output).await?;
+                pay_invoice(&card, &invoice_details).await?;
                 println!("✅ Payment sent successfully!");
             } else {
                 println!("Payment cancelled");
@@ -283,14 +284,13 @@ async fn get_balance(card: &anypay::wallet::Card) -> Result<Balance> {
 #[derive(Debug)]
 struct InvoiceDetails {
     uid: String,
-    merchant: String,
     outputs: Vec<PaymentOutput>,
 }
 
 #[derive(Debug, Clone)]
 struct PaymentOutput {
     address: String,
-    amount: f64,
+    amount: u64,  // Store as satoshis for BTC, regular amount for others
     currency: String,
 }
 
@@ -327,32 +327,45 @@ async fn fetch_invoice_details(uid: &str) -> Result<InvoiceDetails> {
     let invoice = client.get_invoice(uid).await?;
     
     let mut outputs = Vec::new();
-    if let Some(payment_options) = invoice.payment_options {
-        for opt in payment_options.payment_options {
-            let currency = opt.currency;
-            for inst in opt.instructions {
-                for out in inst.outputs {
-                    outputs.push(PaymentOutput {
-                        address: out.address,
-                        amount: out.amount,
-                        currency: currency.clone(),
-                    });
-                }
+    for opt in &invoice.payment_options {
+        let currency = opt.currency.clone();
+        println!("\nProcessing payment option for currency: {}", currency);
+        for inst in &opt.instructions {
+            for out in &inst.outputs {
+                println!("Raw output amount: {}", out.amount);
+                let amount = if currency == "BTC" {
+                    out.amount  // Keep as satoshis for BTC
+                } else {
+                    out.amount
+                };
+                outputs.push(PaymentOutput {
+                    address: out.address.clone(),
+                    amount,
+                    currency: currency.clone(),
+                });
+                println!("Added output: {} {} to {}", 
+                    if currency == "BTC" { format!("{} sats", amount) } else { amount.to_string() },
+                    currency, 
+                    out.address
+                );
             }
         }
     }
 
     Ok(InvoiceDetails {
         uid: invoice.uid,
-        merchant: invoice.merchant_name,
         outputs,
     })
 }
 
-async fn pay_invoice(card: &anypay::wallet::Card, invoice: &InvoiceDetails, output: &PaymentOutput) -> Result<()> {
+async fn pay_invoice(card: &anypay::wallet::Card, invoice: &InvoiceDetails) -> Result<()> {
     // Only handle BTC payments for now
-    if output.currency != "BTC" {
-        return Err(anyhow!("Only BTC payments are supported currently"));
+    let outputs = invoice.outputs.iter()
+        .filter(|output| output.currency == "BTC")
+        .collect::<Vec<_>>();
+
+    if outputs.is_empty() {
+        return Err(anyhow!("No BTC payment options found"));
     }
 
     let api_key = env::var("ANYPAY_API_KEY")
@@ -364,12 +377,16 @@ async fn pay_invoice(card: &anypay::wallet::Card, invoice: &InvoiceDetails, outp
     println!("Fetching UTXOs...");
     let utxos = client.get_utxos(&card.address.to_string()).await?;
     
-    // 2. Calculate required amount (including estimated fee)
+    // 2. Calculate total required amount (including estimated fee)
     let fee_rate = 10.0; // sats/vbyte
-    let output_amount = Amount::from_btc(output.amount)?;
+    let total_output_amount = Amount::from_sat(
+        outputs.iter()
+            .map(|output| output.amount)
+            .sum()
+    );
     let estimated_size = 200; // Rough estimate for a typical transaction
     let fee_amount = Amount::from_sat((fee_rate * estimated_size as f64) as u64);
-    let total_required = output_amount + fee_amount;
+    let total_required = total_output_amount + fee_amount;
 
     // 3. Select UTXOs
     let selected_utxos = select_utxos(&utxos, total_required)?;
@@ -387,7 +404,7 @@ async fn pay_invoice(card: &anypay::wallet::Card, invoice: &InvoiceDetails, outp
 
     // Add inputs
     for utxo in &selected_utxos {
-        let outpoint = OutPoint::from_str(&utxo.txid)
+        let outpoint = OutPoint::from_str(&format!("{}:{}", utxo.txid, utxo.vout))
             .map_err(|_| anyhow!("Invalid UTXO txid: {}", utxo.txid))?;
         tx_builder.input.push(TxIn {
             previous_output: outpoint,
@@ -397,27 +414,77 @@ async fn pay_invoice(card: &anypay::wallet::Card, invoice: &InvoiceDetails, outp
         });
     }
 
-    // Add payment output
-    let recipient_address = BtcAddress::from_str(&output.address)
-        .map_err(|_| anyhow!("Invalid recipient address: {}", output.address))?
-        .require_network(card.network)
-        .map_err(|_| anyhow!("Address network mismatch"))?;
-    tx_builder.output.push(TxOut {
-        value: output_amount,
-        script_pubkey: recipient_address.script_pubkey(),
-    });
+    // Add all payment outputs
+    for output in outputs {
+        println!("\nProcessing output address: {}", output.address);
+        println!("Output amount: {} sats", output.amount);
+        
+        // Check if it's a Taproot address
+        let is_taproot = output.address.starts_with("bc1p");
+        println!("Is Taproot address: {}", is_taproot);
+        
+        let recipient_address = BtcAddress::from_str(&output.address)
+            .map_err(|e| anyhow!("Invalid recipient address {}: {}", output.address, e))?;
+        
+        let network_address = recipient_address
+            .require_network(card.network)
+            .map_err(|e| anyhow!("Address network mismatch for {}: {}", output.address, e))?;
+        
+        let output_amount = Amount::from_sat(output.amount);
+        let script_pubkey = network_address.script_pubkey();
+        
+        // Debug output for script analysis
+        println!("Script details for {}", output.address);
+        println!("Amount: {} sats", output_amount.to_sat());
+        println!("Script hex: {}", script_pubkey.to_hex_string());
+        println!("Script asm: {}", script_pubkey.to_asm_string());
+        
+        // For Taproot addresses, verify the script format
+        if is_taproot {
+            let script_hex = script_pubkey.to_hex_string();
+            if !script_hex.starts_with("5120") {
+                return Err(anyhow!("Invalid Taproot script - should start with OP_1 (0x51) followed by 0x20 for 32-byte push"));
+            }
+            println!("✓ Verified Taproot script format");
+            
+            // Extract and verify the key
+            let key_hex = &script_hex[4..];  // Skip the 5120 prefix
+            println!("Taproot key: {}", key_hex);
+            
+            // Try to reconstruct the address
+            if let Ok(addr) = BtcAddress::from_script(&script_pubkey, card.network) {
+                println!("Reconstructed: {}", addr);
+                if addr.to_string() != output.address {
+                    return Err(anyhow!("Address mismatch:\nExpected: {}\nGot:      {}", output.address, addr));
+                }
+                println!("✓ Address reconstruction verified");
+            } else {
+                return Err(anyhow!("Failed to reconstruct address from script"));
+            }
+        }
+        
+        tx_builder.output.push(TxOut {
+            value: output_amount,
+            script_pubkey,
+        });
+        println!("Added output {} of {} sats to {}", 
+            tx_builder.output.len() - 1,
+            output_amount.to_sat(), 
+            output.address);
+    }
 
     // Add change output if necessary
-    let change_amount = total_input - output_amount - fee_amount;
+    let change_amount = total_input - total_output_amount - fee_amount;
     if change_amount > Amount::ZERO {
         let change_address = BtcAddress::from_str(&card.address.to_string())
             .map_err(|_| anyhow!("Invalid change address: {}", card.address))?
             .require_network(card.network)
             .map_err(|_| anyhow!("Address network mismatch"))?;
         tx_builder.output.push(TxOut {
-            value: change_amount,
+            value: Amount::from_sat(change_amount.to_sat()),
             script_pubkey: change_address.script_pubkey(),
         });
+        println!("Added change output: {} BTC to {}", Amount::from_sat(change_amount.to_sat()).to_btc(), card.address);
     }
 
     // 5. Sign transaction
@@ -438,7 +505,31 @@ async fn pay_invoice(card: &anypay::wallet::Card, invoice: &InvoiceDetails, outp
 
     // Extract final transaction
     let final_tx = psbt.extract_tx()?;
+    
+    // Verify all outputs are present with correct amounts
+    println!("\nVerifying transaction outputs:");
+    for (i, output) in final_tx.output.iter().enumerate() {
+        println!("Output {}: {} sats", i, output.value.to_sat());
+        println!("Script: {}", output.script_pubkey.to_hex_string());
+    }
+
+    // Double check the specific output we're looking for
+    let found_output = final_tx.output.iter()
+        .find(|out| {
+            let addr = BtcAddress::from_script(&out.script_pubkey, card.network).ok();
+            addr.map(|a| a.to_string()) == Some("bc1pgvvd6umckwre32s74p0n4yqetq9mexhk4egglv6arz7k39kzk6dqwxaj9t".to_string())
+        });
+
+    if let Some(out) = found_output {
+        println!("\nFound target output:");
+        println!("Amount: {} sats", out.value.to_sat());
+        println!("Script: {}", out.script_pubkey.to_hex_string());
+    } else {
+        println!("\nWARNING: Target output not found in final transaction!");
+    }
+
     let tx_hex = serialize_hex(&final_tx);
+    println!("\nTransaction hex: {}", tx_hex);
 
     // 6. Submit payment
     println!("Submitting payment...");
