@@ -101,6 +101,21 @@ pub struct PriceList {
     pub prices: Vec<Price>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ConversionResponse {
+    conversion: Conversion,
+}
+
+#[derive(Debug, Deserialize)]
+struct Conversion {
+    output: ConversionOutput,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConversionOutput {
+    value: f64,
+}
+
 pub struct AnypayClient {
     client: reqwest::Client,
     api_url: String,
@@ -273,12 +288,17 @@ impl AnypayClient {
     }
 
     pub async fn get_price(&self, currency: &str) -> Result<f64> {
-        let prices = self.get_prices().await?;
-        let price = prices.prices.iter()
-            .find(|p| p.currency == currency && p.base_currency == "USD")
-            .ok_or_else(|| anyhow!("Price not found for currency: {}", currency))?;
-        
-        price.value.parse::<f64>()
-            .map_err(|e| anyhow!("Failed to parse price: {}", e))
+        let response = self.client
+            .get(&format!("{}/convert/1-{}/to-USD", self.api_url, currency))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error = response.text().await?;
+            return Err(anyhow!("Failed to fetch price: {}", error));
+        }
+
+        let conversion = response.json::<ConversionResponse>().await?;
+        Ok(conversion.conversion.output.value)
     }
 } 

@@ -6,8 +6,8 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "anypay-client"
-path = "src/bin/anypay-client.rs"
+name = "anypay-cli"
+path = "src/bin/anypay-cli.rs"
 
 [[bin]]
 name = "anypay-server"

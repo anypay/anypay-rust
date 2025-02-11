@@ -8,6 +8,7 @@ pub mod xrp;
 pub mod sol;
 pub mod eth;
 pub mod doge;
+//pub mod btc;
 #[async_trait]
 pub trait Card {
     /// Get the chain identifier (e.g., "BTC", "XRPL")
@@ -56,13 +57,14 @@ pub fn create_card(
     account: u32,
     seed_phrase: &str,
 ) -> Result<Box<dyn Card>> {
+    println!("Creating card for chain: {}, currency: {}, network: {:?}, account: {}", chain, currency, network, account);
     match (chain, currency) {
-        //("BTC", "BTC") => Ok(Box::new(btc::BitcoinCard::new(network, account, seed_phrase)?)),
-        ("XRPL", "XRP") => Ok(Box::new(xrp::RippleCard::new(network, account, seed_phrase)?)),
-        ("SOL", "SOL") => Ok(Box::new(sol::SolanaCard::new(network, account, seed_phrase)?)),
         ("ETH", "ETH") => Ok(Box::new(eth::EthereumCard::new(network, account, seed_phrase, "ETH", "ETH")?)),
         ("POLYGON", "MATIC") => Ok(Box::new(eth::EthereumCard::new(network, account, seed_phrase, "POLYGON", "MATIC")?)),
+        ("XRPL", "XRP") => Ok(Box::new(xrp::RippleCard::new(network, account, seed_phrase)?)),
+        ("SOL", "SOL") => Ok(Box::new(sol::SolanaCard::new(network, account, seed_phrase)?)),
         ("DOGE", "DOGE") => Ok(Box::new(doge::DogeCard::new(network, account, seed_phrase)?)),
+        //("BTC", "BTC") => Ok(Box::new(btc::BitcoinCard::new(network, account, seed_phrase)?)),
         _ => Err(anyhow::anyhow!("Unsupported chain/currency combination: {}/{}", chain, currency))
     }
 } 
