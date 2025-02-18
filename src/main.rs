@@ -13,6 +13,8 @@ mod config;
 mod invoices;
 mod ethereum;
 mod uri;
+mod blockbook;
+mod confirmations;
 use std::sync::Arc;
 use std::net::SocketAddr;
 

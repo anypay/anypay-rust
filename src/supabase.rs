@@ -2,14 +2,15 @@ use serde::{Deserialize, Serialize};
 use postgrest::Postgrest;
 use serde_json::{self, json, Value};
 use uuid::Uuid;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use std::sync::RwLock;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use tokio::time::{interval, Duration};
 use std::sync::Arc;
 use anyhow::{Result, anyhow};
-
+use reqwest;
+use crate::confirmations::{Payment, Confirmation};
 use crate::{payment::ConversionRequest, payment_options::create_payment_options, types::{Account, Address, Coin, CreateInvoiceRequest, Invoice, PaymentOption, Price}};
 
 lazy_static! {
@@ -22,6 +23,7 @@ pub struct SupabaseClient {
     client: Arc<Postgrest>,
     anon_key: String,
     service_role_key: String,
+    base_url: String,
 }
 
 impl SupabaseClient {
@@ -41,6 +43,7 @@ impl SupabaseClient {
             client,
             anon_key: anon_key.to_string(),
             service_role_key: service_role_key.to_string(),
+            base_url: api_url,
         }
     }
 
@@ -412,6 +415,75 @@ impl SupabaseClient {
         self.update_invoice_status(uid, "cancelled").await?;
         
         Ok(())
+    }
+
+    async fn get(&self, path: &str) -> Result<reqwest::Response> {
+        Ok(reqwest::Client::new()
+            .get(format!("{}{}", self.base_url, path))
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", self.service_role_key))
+            .send()
+            .await?)
+    }
+
+    async fn patch(&self, path: &str, body: serde_json::Value) -> Result<reqwest::Response> {
+        Ok(reqwest::Client::new()
+            .patch(format!("{}{}", self.base_url, path))
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", self.service_role_key))
+            .json(&body)
+            .send()
+            .await?)
+    }
+
+    pub async fn get_unconfirmed_payment_by_txid(&self, txid: &str) -> Result<Option<Payment>> {
+        let path = format!("/rest/v1/payments?txid=eq.{}&confirmation_hash=is.null", txid);
+        let response = self.get(&path).await?;
+        let payments: Vec<Payment> = response.json().await?;
+        Ok(payments.into_iter().next())
+    }
+
+    pub async fn confirm_payment(&self, payment: Payment, confirmation: Confirmation) -> Result<Payment> {
+        let path = format!("/rest/v1/payments?id=eq.{}", payment.id);
+        let response = self.patch(&path, json!({
+            "confirmation_hash": confirmation.confirmation_hash,
+            "confirmation_height": confirmation.confirmation_height,
+            "confirmation_date": confirmation.confirmation_date,
+            "status": "confirmed"
+        })).await?;
+
+        Ok(response.json().await?)
+    }
+
+    pub async fn get_unconfirmed_payments(&self, chain: &str, currency: &str) -> Result<Vec<Payment>> {
+        let path = format!("/rest/v1/payments?chain=eq.{}&currency=eq.{}&confirmation_hash=is.null", chain, currency);
+        let response = self.get(&path).await?;
+        Ok(response.json().await?)
+    }
+
+    pub async fn get_payment_by_txid(&self, txid: &str) -> Result<Option<Payment>> {
+        let path = format!("/rest/v1/payments?txid=eq.{}", txid);
+        let response = self.get(&path).await?;
+        let payments: Vec<Payment> = response.json().await?;
+        Ok(payments.into_iter().next())
+    }
+
+    pub async fn update_payment(
+        &self,
+        id: i32,
+        confirmation_hash: &str,
+        confirmation_height: i32,
+        confirmation_date: &DateTime<Utc>,
+    ) -> Result<Payment> {
+        let path = format!("/rest/v1/payments?id=eq.{}", id);
+        let response = self.patch(&path, json!({
+            "confirmation_hash": confirmation_hash,
+            "confirmation_height": confirmation_height,
+            "confirmation_date": confirmation_date,
+            "status": "confirmed"
+        })).await?;
+
+        Ok(response.json().await?)
     }
 }
 

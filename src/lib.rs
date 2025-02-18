@@ -17,3 +17,5 @@ pub mod plugin;
 pub mod wallet;
 pub mod client;
 pub mod cards;
+pub mod blockbook;
+pub mod confirmations;
