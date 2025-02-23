@@ -7,6 +7,7 @@ use tokio::sync::oneshot;
 use reqwest;
 use crate::supabase::SupabaseClient;
 use crate::confirmations;
+use chrono::{DateTime, Utc};
 
 #[derive(Debug, Serialize)]
 struct SubscribeRequest {
@@ -17,9 +18,10 @@ struct SubscribeRequest {
 
 #[derive(Debug, Deserialize)]
 struct BlockNotification {
-    #[serde(rename = "blockHash")]
-    block_hash: String,
+    hash: String,
     height: u32,
+    #[serde(default)]
+    timestamp: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +77,20 @@ enum BlockbookData {
     Block(BlockNotification),
     Transaction(TransactionNotification),
     Subscription { subscribed: bool },
+}
+
+#[derive(Debug, Deserialize)]
+struct BlockbookBlockResponse {
+    hash: String,
+    height: u32,
+    time: i64,
+    txs: Vec<BlockbookTransaction>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BlockbookTransaction {
+    txid: String,
+    // We can add other fields if needed later
 }
 
 pub struct BlockbookClient {
@@ -141,10 +157,10 @@ impl BlockbookClient {
                                         if let Some(data) = block_msg.data {
                                             match data {
                                                 BlockbookData::Block(block) => {
-                                                    info!("New block: hash={} height={}", block.block_hash, block.height);
+                                                    info!("New block: hash={} height={}", block.hash, block.height);
                                                     let client = BlockbookClient::new(ws_url.clone(), api_key.clone(), supabase.clone());
                                                     if let Err(e) = client.process_block(&block).await {
-                                                        error!("Failed to process block {}: {}", block.block_hash, e);
+                                                        error!("Failed to process block {}: {}", block.hash, e);
                                                     }
                                                 }
                                                 BlockbookData::Transaction(tx) => {
@@ -181,32 +197,35 @@ impl BlockbookClient {
     }
 
     async fn get_block_txids(&self, hash: &str) -> Result<Vec<String>> {
-        let url = format!("https://{}/api/v2/block/{}", self.ws_url, hash);
+        let url = format!("https://{}/{}/api/v2/block/{}", self.ws_url, self.api_key, hash);
         let response = reqwest::Client::new()
             .get(&url)
             .header("api-key", &self.api_key)
             .send()
             .await?
-            .json::<serde_json::Value>()
+            .json::<BlockbookBlockResponse>()
             .await?;
 
-        Ok(response["txids"]
-            .as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default())
+        // Extract just the txids from transactions
+        Ok(response.txs.into_iter().map(|tx| tx.txid).collect())
     }
 
     async fn process_block(&self, block: &BlockNotification) -> Result<()> {
-        info!("Processing block {} at height {}", block.block_hash, block.height);
+        info!("Processing block {} at height {}", block.hash, block.height);
         
-        let txids = self.get_block_txids(&block.block_hash).await?;
+        let txids = self.get_block_txids(&block.hash).await?;
         
         for txid in txids {
             if let Some(payment) = self.supabase.get_unconfirmed_payment_by_txid(&txid).await? {
                 let confirmation = confirmations::Confirmation {
-                    confirmation_hash: block.block_hash.clone(),
+                    confirmation_hash: block.hash.clone(),
                     confirmation_height: block.height as i32,
-                    confirmation_date: chrono::Utc::now(),
+                    confirmation_date: if block.timestamp > 0 {
+                        DateTime::from_timestamp(block.timestamp, 0)
+                            .unwrap_or_else(|| Utc::now())
+                    } else {
+                        Utc::now()
+                    },
                     confirmations: Some(1),
                 };
 
