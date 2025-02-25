@@ -1,0 +1,80 @@
+name: Cross-Platform Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Release - ${{ matrix.platform.os-name }}
+    strategy:
+      matrix:
+        platform:
+          - os-name: FreeBSD-x86_64
+            runs-on: ubuntu-24.04
+            target: x86_64-unknown-freebsd
+
+          - os-name: Linux-x86_64
+            runs-on: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+
+          - os-name: Linux-aarch64
+            runs-on: ubuntu-24.04
+            target: aarch64-unknown-linux-musl
+
+          - os-name: Linux-riscv64
+            runs-on: ubuntu-24.04
+            target: riscv64gc-unknown-linux-gnu
+
+          - os-name: Windows-x86_64
+            runs-on: windows-latest
+            target: x86_64-pc-windows-msvc
+
+          - os-name: macOS-x86_64
+            runs-on: macos-latest
+            target: x86_64-apple-darwin
+
+          - os-name: macOS-aarch64
+            runs-on: macos-latest
+            target: aarch64-apple-darwin
+
+    runs-on: ${{ matrix.platform.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build binary
+        uses: houseabsolute/actions-rust-cross@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: "--locked --release"
+          strip: true
+
+      - name: Package Binary
+        shell: bash
+        run: |
+          cd target/${{ matrix.platform.target }}/release
+          if [[ "${{ matrix.platform.os-name }}" == "Windows-x86_64" ]]; then
+            7z a ../../../anypay-${{ matrix.platform.os-name }}.zip anypay-server.exe anypay-wallet.exe
+          else
+            tar -czf ../../../anypay-${{ matrix.platform.os-name }}.tar.gz anypay-server anypay-wallet
+          fi
+          cd ../../..
+
+      - name: Generate SHA256
+        shell: bash
+        run: |
+          if [[ "${{ matrix.platform.os-name }}" == "Windows-x86_64" ]]; then
+            sha256sum anypay-${{ matrix.platform.os-name }}.zip > anypay-${{ matrix.platform.os-name }}.zip.sha256
+          else
+            sha256sum anypay-${{ matrix.platform.os-name }}.tar.gz > anypay-${{ matrix.platform.os-name }}.tar.gz.sha256
+          fi
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            anypay-${{ matrix.platform.os-name }}.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
