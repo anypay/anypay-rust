@@ -9,8 +9,25 @@ use bitcoin::{
 use bip32::{DerivationPath, XPrv};
 use std::str::FromStr;
 use bip39::Mnemonic;
+use serde::{Deserialize, Serialize};
 
-pub struct BitcoinCard {
+// Custom UTXO struct for Fractal Bitcoin API response format
+#[derive(Debug, Deserialize, Clone)]
+struct FractalUtxo {
+    pub txid: String,
+    pub vout: u32,
+    pub value: u64,  // Fractal API uses 'value' instead of 'amount'
+    pub status: FractalUtxoStatus,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FractalUtxoStatus {
+    pub confirmed: bool,
+    pub block_height: Option<u32>,
+    pub block_time: Option<u64>,
+}
+
+pub struct FractalBitcoinCard {
     network: Network,
     account: u32,
     address: String,
@@ -18,7 +35,7 @@ pub struct BitcoinCard {
     private_key: SecretKey,
 }
 
-impl BitcoinCard {
+impl FractalBitcoinCard {
     pub fn new(network: Network, account: u32, seed_phrase: &str) -> Result<Self> {
         let mnemonic = Mnemonic::parse(seed_phrase)
             .map_err(|e| anyhow!("Invalid seed phrase: {}", e))?;
@@ -26,7 +43,7 @@ impl BitcoinCard {
         let seed = mnemonic.to_seed("");
         let secp = Secp256k1::new();
 
-        // Derive BIP44 path: m/44'/0'/account'/0/0 for BTC
+        // Derive BIP44 path: m/44'/0'/account'/0/0 for FB
         let path = format!("m/44'/0'/{}'/0/0", account);
         let derivation_path = DerivationPath::from_str(&path)
             .map_err(|e| anyhow!("Invalid derivation path: {}", e))?;
@@ -57,13 +74,13 @@ impl BitcoinCard {
 }
 
 #[async_trait]
-impl Card for BitcoinCard {
+impl Card for FractalBitcoinCard {
     fn chain(&self) -> &str {
-        "BTC"
+        "FB"
     }
 
     fn currency(&self) -> &str {
-        "BTC"
+        "FB"
     }
 
     fn network(&self) -> Network {
@@ -85,13 +102,32 @@ impl Card for BitcoinCard {
     async fn get_balance(&self) -> Result<u64> {
         let api_key = std::env::var("ANYPAY_API_KEY")
             .map_err(|_| anyhow!("ANYPAY_API_KEY environment variable not set"))?;
+        // log the url
+        tracing::info!("Fetching UTXOs from Fractal API: {}", &format!("https://mempool.fractalbitcoin.io/api/v1/address/{}/utxo", self.address));
+
+        // print the url to the console
+        println!("Fetching UTXOs from Fractal API: {}", &format!("https://mempool.fractalbitcoin.io/api/v1/address/{}/utxo", self.address));
         
-        let client = crate::client::AnypayClient::new(&api_key);
-        let utxos = client.get_utxos(&self.address).await?;
+        // Use Fractal-specific API for getting UTXOs
+        let fractal_utxos = match reqwest::Client::new()
+            .get(&format!("https://mempool.fractalbitcoin.io/api/v1/address/{}/utxo", self.address))
+            .send()
+            .await {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        response.json::<Vec<FractalUtxo>>().await
+                            .map_err(|e| anyhow!("Failed to parse UTXOs: {}", e))?
+                    } else {
+                        let error = response.text().await?;
+                        return Err(anyhow!("Failed to fetch UTXOs from Fractal API: {}", error));
+                    }
+                },
+                Err(e) => return Err(anyhow!("Failed to connect to Fractal API: {}", e))
+            };
         
-        let total_sats: u64 = utxos.iter()
-            .map(|utxo| bitcoin::Amount::from_btc(utxo.amount).unwrap_or(bitcoin::Amount::ZERO))
-            .map(|amount| amount.to_sat())
+        // Sum the values directly (they're already in satoshis)
+        let total_sats: u64 = fractal_utxos.iter()
+            .map(|utxo| utxo.value)
             .sum();
 
         Ok(total_sats)
@@ -99,18 +135,35 @@ impl Card for BitcoinCard {
 
     async fn get_decimal_balance(&self) -> Result<f64> {
         let sats = self.get_balance().await?;
+        // Convert satoshis to FB (same as BTC, 1 FB = 100,000,000 satoshis)
         Ok(sats as f64 / 100_000_000.0)
     }
 
     async fn get_usd_balance(&self) -> Result<f64> {
-        let btc = self.get_decimal_balance().await?;
+        let fb = self.get_decimal_balance().await?;
         let api_key = std::env::var("ANYPAY_API_KEY")
             .map_err(|_| anyhow!("ANYPAY_API_KEY environment variable not set"))?;
         
-        let client = crate::client::AnypayClient::new(&api_key);
-        let btc_price = client.get_btc_price().await?;
+        // Get FB price instead of BTC price
+        let response = reqwest::Client::new()
+            .get("https://api.anypayx.com/convert/1-FB/to-USD")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error = response.text().await?;
+            return Err(anyhow!("Failed to fetch FB price: {}", error));
+        }
+
+        let data = response.json::<serde_json::Value>().await?;
+        let fb_price = data
+            .get("conversion")
+            .and_then(|c| c.get("output"))
+            .and_then(|o| o.get("value"))
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| anyhow!("Failed to extract FB price from response"))?;
         
-        Ok(btc * btc_price)
+        Ok(fb * fb_price)
     }
 
     fn sign_transaction(&self, psbt: &mut Psbt) -> Result<()> {

@@ -8,9 +8,13 @@ pub mod xrp;
 pub mod sol;
 pub mod eth;
 pub mod doge;
-//pub mod btc;
+pub mod fb;
+pub mod btc;
+
+use std::fmt;
+
 #[async_trait]
-pub trait Card {
+pub trait Card: Send + Sync {
     /// Get the chain identifier (e.g., "BTC", "XRPL")
     fn chain(&self) -> &str;
     
@@ -42,6 +46,30 @@ pub trait Card {
     fn sign_transaction(&self, tx: &mut Psbt) -> Result<()>;
 }
 
+// Implementation of Display for Box<dyn Card>
+impl fmt::Display for Box<dyn Card> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Chain: {}\nCurrency: {}\nNetwork: {:?}\nDerivation Path: {}\nAddress: {}", 
+               self.chain(), 
+               self.currency(), 
+               self.network(), 
+               self.derivation_path(), 
+               self.address())
+    }
+}
+
+// Allow Debug printing of Box<dyn Card>
+impl fmt::Debug for Box<dyn Card> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Chain: {}\nCurrency: {}\nNetwork: {:?}\nDerivation Path: {}\nAddress: {}", 
+               self.chain(), 
+               self.currency(), 
+               self.network(), 
+               self.derivation_path(), 
+               self.address())
+    }
+}
+
 #[derive(Debug)]
 pub struct Balance {
     pub smallest_unit: u64,  // satoshis, drops, etc.
@@ -64,6 +92,8 @@ pub fn create_card(
         ("XRPL", "XRP") => Ok(Box::new(xrp::RippleCard::new(network, account, seed_phrase)?)),
         ("SOL", "SOL") => Ok(Box::new(sol::SolanaCard::new(network, account, seed_phrase)?)),
         ("DOGE", "DOGE") => Ok(Box::new(doge::DogeCard::new(network, account, seed_phrase)?)),
+        ("FB", "FB") => Ok(Box::new(fb::FractalBitcoinCard::new(network, account, seed_phrase)?)),
+        ("BTC", "BTC") => Ok(Box::new(btc::BitcoinCard::new(network, account, seed_phrase)?)),
         //("BTC", "BTC") => Ok(Box::new(btc::BitcoinCard::new(network, account, seed_phrase)?)),
         _ => Err(anyhow::anyhow!("Unsupported chain/currency combination: {}/{}", chain, currency))
     }

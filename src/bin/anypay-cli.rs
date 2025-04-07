@@ -94,6 +94,18 @@ enum Commands {
         redirect_url: Option<String>,
     },
     
+    /// Set a blockchain address for a specific chain and currency
+    SetAddress {
+        #[arg(long, help = "Blockchain address")]
+        address: String,
+
+        #[arg(long, help = "Blockchain (e.g. ETH, BTC)")]
+        chain: String,
+
+        #[arg(long, help = "Currency/token (e.g. ETH, BTC, USDT). Defaults to same as chain if not specified")]
+        currency: Option<String>,
+    },
+    
     /// Get invoice details
     GetInvoice {
         #[arg(short, long)]
@@ -325,6 +337,43 @@ async fn submit_payment(
     Ok(body)
 }
 
+async fn set_address(
+    client: &reqwest::Client,
+    address: &str,
+    chain: &str,
+    currency: &str,
+    api_url: &str,
+    auth_token: &str,
+) -> Result<Value, Box<dyn Error>> {
+    // Create the payload for setting an address
+    let payload = serde_json::json!({
+        "address": address,
+        "chain": chain,
+        "currency": currency
+    });
+
+    // Create auth header
+    let auth_value = format!("{}:", auth_token); // Note the colon for empty password
+    let auth_header = format!("Basic {}", BASE64.encode(auth_value.as_bytes()));
+
+    // Send the request to set the address
+    let response = client
+        .post(&format!("{}/api/v1/addresses", api_url))
+        .header(AUTHORIZATION, auth_header)
+        .json(&payload)
+        .send()
+        .await?;
+
+    let status = response.status();
+    let body = response.json::<Value>().await?;
+
+    if !status.is_success() {
+        return Err(format!("Failed to set address: {}", body).into());
+    }
+
+    Ok(body)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // Initialize logging only if not in JSON mode
@@ -447,6 +496,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         println!("{}", serde_json::to_string(&response)?);
                     } else {
                         println!("Current prices: {}", serde_json::to_string_pretty(&response)?);
+                    }
+                },
+                
+                Commands::SetAddress { address, chain, currency } => {
+                    // Require auth token for set-address
+                    let auth_token = cli.auth_token
+                        .ok_or_else(|| "Auth token is required for setting addresses. Provide via --auth-token or ANYPAY_TOKEN env var")?;
+                        
+                    // If currency is not specified, use the chain value as the default
+                    let currency_value = currency.clone().unwrap_or_else(|| chain.clone());
+                    
+                    let response = set_address(&client, &address, &chain, &currency_value, &cli.api_url, &auth_token).await?;
+                    if cli.json {
+                        println!("{}", serde_json::to_string(&response)?);
+                    } else {
+                        println!("Address set: {}", serde_json::to_string_pretty(&response)?);
                     }
                 },
                 

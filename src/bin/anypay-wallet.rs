@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use bitcoin::Network;
 use anyhow::{Result, anyhow};
+use std::fmt::{self, Display};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -163,6 +164,8 @@ async fn main() -> Result<()> {
                     ("XRPL", "XRP"),
                     ("SOL", "SOL"),
                     ("DOGE", "DOGE"),
+                    ("FB", "FB"),
+                    ("BTC", "BTC"),
                 ];
                 
                 for (chain, currency) in supported_pairs {
@@ -203,6 +206,9 @@ async fn main() -> Result<()> {
             // Create card for payment
             println!("Creating card for {}/{}", chain, currency);
             let card = wallet.create_card(&chain, &currency, network, account)?;
+
+            // print the card to the console
+            println!("Card: {:?}", card);
             
             // Execute payment
             println!("Executing payment...");

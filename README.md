@@ -175,3 +175,31 @@ MIT License. See [LICENSE](LICENSE) for details.
 ---
 
 Thank you for choosing Anypay! We look forward to powering your payment solutions. 😊
+
+# Homebrew Anypay
+
+Homebrew tap for Anypay payment processing tools.
+
+## Installation
+
+Add the tap:
+```bash
+brew tap anypay/anypay
+```
+
+Install all tools:
+```bash
+brew install anypay
+```
+
+Or install individual components:
+```bash
+brew install anypay-server
+brew install anypay-wallet
+```
+
+## Available Formulae
+
+- `anypay` - Complete suite
+- `anypay-server` - Payment processing server
+- `anypay-wallet` - Wallet client

@@ -18,6 +18,7 @@ use std::str::FromStr;
 use url::Url;
 use crate::client::{AnypayClient, Utxo};
 use crate::cards;
+use serde::Deserialize;
 
 pub struct Wallet {
     mnemonic: Mnemonic,
@@ -167,13 +168,13 @@ impl Wallet {
     }
 
     pub async fn pay_invoice(card: &Box<dyn cards::Card>, invoice: &InvoiceDetails) -> Result<()> {
-        // Only handle BTC payments for now
+        // Handle both BTC and FB payments
         let outputs = invoice.outputs.iter()
-            .filter(|output| output.currency == "BTC")
+            .filter(|output| output.currency == card.currency())
             .collect::<Vec<_>>();
 
         if outputs.is_empty() {
-            return Err(anyhow!("No BTC payment options found"));
+            return Err(anyhow!("No {} payment options found for this invoice", card.currency()));
         }
 
         let api_key = std::env::var("ANYPAY_API_KEY")
@@ -183,7 +184,54 @@ impl Wallet {
 
         // 1. Fetch UTXOs for the source address
         println!("Fetching UTXOs...");
-        let utxos = client.get_utxos(card.address()).await?;
+        
+        // Special handling for Fractal Bitcoin (FB) UTXOs
+        let utxos = if card.chain() == "FB" {
+            // Use the Fractal API to get UTXOs
+            #[derive(Deserialize)]
+            struct FractalUtxo {
+                txid: String,
+                vout: u32,
+                value: u64,
+                status: FractalUtxoStatus,
+            }
+            
+            #[derive(Deserialize)]
+            struct FractalUtxoStatus {
+                confirmed: bool,
+                block_height: Option<u32>,
+                block_time: Option<u64>,
+            }
+            
+            println!("Fetching UTXOs from Fractal API for {}", card.address());
+            let response = reqwest::Client::new()
+                .get(&format!("https://mempool.fractalbitcoin.io/api/v1/address/{}/utxo", card.address()))
+                .send()
+                .await?;
+                
+            if !response.status().is_success() {
+                let error = response.text().await?;
+                return Err(anyhow!("Failed to fetch UTXOs from Fractal API: {}", error));
+            }
+            
+            let fractal_utxos = response.json::<Vec<FractalUtxo>>().await?;
+            
+            // Convert fractal UTXOs to our standard format
+            fractal_utxos.into_iter()
+                .map(|u| {
+                    Utxo {
+                        txid: u.txid,
+                        vout: u.vout,
+                        amount: u.value as f64 / 100_000_000.0, // Convert satoshis to BTC
+                        confirmations: if u.status.confirmed { 1 } else { 0 }, // Simple confirmation handling
+                        script_pub_key: String::new(),
+                    }
+                })
+                .collect()
+        } else {
+            // For regular BTC, use the standard mempool API
+            client.get_utxos(card.address()).await?
+        };
         
         // 2. Calculate total required amount (including estimated fee)
         let fee_rate = 10.0; // sats/vbyte
@@ -283,7 +331,9 @@ impl Wallet {
 
         // 6. Submit payment
         println!("Submitting payment...");
-        client.submit_payment(&invoice.uid, "BTC", "BTC", &tx_hex).await?;
+        client.submit_payment(&invoice.uid, card.chain(), card.currency(), &tx_hex).await?;
+
+        println!("Payment submitted successfully!");
 
         Ok(())
     }

@@ -10,6 +10,7 @@ mod eth;
 mod xrp;
 mod sol;
 mod rlusd_eth;
+mod fb;
 
 pub use btc::BitcoinPlugin;
 pub use bsv::BitcoinSVPlugin;
@@ -17,6 +18,7 @@ pub use eth::EthereumPlugin;
 pub use xrp::RipplePlugin;
 pub use sol::SolanaPlugin;
 pub use rlusd_eth::RLUSDEthereumPlugin;
+pub use fb::FractalBitcoinPlugin;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
@@ -75,7 +77,6 @@ pub trait Plugin: Send + Sync {
     fn currency(&self) -> &str;
     fn chain(&self) -> &str;
     fn decimals(&self) -> u8;
-
     async fn build_signed_payment(&self, payment_option: &PaymentOption, mnemonic: &str) -> Result<Transaction>;
     async fn verify_payment(&self, payment_option: &PaymentOption, transaction: &Transaction) -> Result<bool>;
     async fn validate_address(&self, address: &str) -> Result<bool>;
@@ -109,6 +110,7 @@ pub fn get_plugin(chain: &str, currency: &str) -> Option<Box<dyn Plugin>> {
         ("ETH", "RLUSD") => Some(Box::new(RLUSDEthereumPlugin)),
         ("XRP", "XRP") => Some(Box::new(RipplePlugin)),
         ("SOL", "SOL") => Some(Box::new(SolanaPlugin)),
+        ("FB", "FB") => Some(Box::new(FractalBitcoinPlugin)),
         _ => None,
     }
 } 
